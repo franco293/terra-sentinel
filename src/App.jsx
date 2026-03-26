@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, useMapEvents } from "react-leaflet";
+import React, { useState, useEffect } from "react";
+import { MapContainer, TileLayer, Marker, Popup, LayersControl, Circle, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -7,579 +7,608 @@ import {
   ALERTS_FEED, MONTHLY_DATA, COST_CALCULATOR, AI_STACK,
   DETECTION_INDICES, TRAINING_DATASETS, ROADMAP, REVENUE_PLANS,
 } from "./data.js";
+import DetectionsTab from "./DetectionsTab.jsx";
 
-/* ═══════════════════════════════════════
-   TERRA SENTINEL v1.0
-   ═══════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   TERRA SENTINEL v1.0 — Satellite Mining Intelligence
+   ═══════════════════════════════════════════════════════ */
 
-var T={bgPrimary:"#060d14",bgCard:"#0c1a28",bgHover:"#0f2030",bgInput:"#0a1520",
-border:"#12283e",textPri:"#e0e8f0",textSec:"#8aa4be",textDim:"#4a6a8a",
-accent:"#00d4aa",accentDim:"#00d4aa22",danger:"#ff2d55",warn:"#ffaa00",info:"#4488ff"};
-var M="'JetBrains Mono',monospace",S="'Instrument Serif',Georgia,serif",F="'DM Sans',sans-serif";
+var T = {
+  bgPrimary:"#060d14",bgCard:"#0c1a28",bgCardHover:"#0f2030",bgInput:"#0a1520",
+  border:"#12283e",borderBright:"#1a3a5a",textPrimary:"#e0e8f0",
+  textSecondary:"#8aa4be",textDim:"#4a6a8a",accent:"#00d4aa",accentDim:"#00d4aa33",
+  danger:"#ff2d55",warning:"#ffaa00",info:"#4488ff",purple:"#a855f7",
+};
+var mono="'JetBrains Mono',monospace",serif="'Instrument Serif',Georgia,serif",sans="'DM Sans',sans-serif";
 
-function gd(o){var d=new Date();d.setDate(d.getDate()-(o||1));return d.toISOString().slice(0,10);}
+function gDate(off){var d=new Date();d.setDate(d.getDate()-(off||1));return d.toISOString().slice(0,10);}
+function gibs(layer,date,fmt,lvl){
+  fmt=fmt||"jpg"; lvl=lvl||9;
+  return "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/"+layer+"/default/"+date+"/GoogleMapsCompatible_Level"+lvl+"/{z}/{y}/{x}."+fmt;
+}
 
-/* ═════════════════════════════════════════════════════════
-   TILE LAYERS — Every layer verified. Zero black tiles.
-   
-   KEY FIX: Each layer defines `nz` (maxNativeZoom).
-   The MapContainer always allows zoom up to 21.
-   Leaflet upscales past nz — you see pixels, never black.
-   ═════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════
+   SATELLITE IMAGERY LAYERS — 22 sources for mining detection
+   Organized by PURPOSE for illegal mining monitoring
+   ═══════════════════════════════════════════════════════ */
 
-var LAYERS=[
-  // HI-RES — Crystal clear, max zoom
-  {id:"google",n:"Google Satellite",c:"Hi-Res Optical",nz:21,
-   u:function(){return"https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}";},
-   a:"Google",d:"Sub-meter clarity. Zoom in to see individual structures, equipment, and road tracks at mining sites."},
-  {id:"google_h",n:"Google Hybrid",c:"Hi-Res Optical",nz:21,
-   u:function(){return"https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}";},
-   a:"Google",d:"Satellite imagery with labels. Use for reports needing geographic context — roads, towns, rivers named."},
-  {id:"esri",n:"ESRI World Imagery",c:"Hi-Res Optical",nz:19,
-   u:function(){return"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";},
-   a:"Esri, Maxar, Earthstar",d:"Different capture dates than Google. Compare both to detect recent terrain changes."},
-  {id:"esri_c",n:"ESRI Clarity Beta",c:"Hi-Res Optical",nz:19,
-   u:function(){return"https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";},
-   a:"Esri Clarity",d:"Enhanced contrast processing. Subtle soil colour differences become more visible for excavation detection."},
+var SAT_LAYERS = [
+  // ── HIGH-RES OPTICAL (Crystal clear, best for visual inspection) ──
+  {id:"esri_world",cat:"optical",name:"ESRI World Imagery",desc:"Highest-res free basemap (~1m). Best for visual identification of mining pits, roads, equipment.",sat:"Maxar/Earthstar",res:"~1m",
+    url:function(){return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";},mz:18,attr:"Esri, Maxar, Earthstar Geographics"},
+  {id:"google_sat",cat:"optical",name:"Google Satellite",desc:"Google's hi-res satellite mosaic. Excellent clarity for identifying structures and terrain changes.",sat:"Multiple",res:"~0.5m",
+    url:function(){return "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}";},mz:20,attr:"Google"},
 
-  // SENTINEL-2 CLOUDLESS — Real S2 data, cloud-free global mosaics by year
-  {id:"s2_2024",n:"Sentinel-2 Cloudless 2024",c:"Sentinel-2 (10m)",nz:14,
-   u:function(){return"https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg";},
-   a:"Sentinel-2 cloudless \u00a9 EOX CC BY 4.0",d:"Latest annual mosaic from ESA Sentinel-2. 10m resolution. Your primary current-state reference."},
-  {id:"s2_2023",n:"Sentinel-2 Cloudless 2023",c:"Sentinel-2 (10m)",nz:14,
-   u:function(){return"https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg";},
-   a:"Sentinel-2 cloudless \u00a9 EOX CC BY 4.0",d:"One year ago. Compare with 2024 to show 12 months of mining expansion as evidence."},
-  {id:"s2_2021",n:"Sentinel-2 Cloudless 2021",c:"Sentinel-2 (10m)",nz:14,
-   u:function(){return"https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg";},
-   a:"Sentinel-2 cloudless \u00a9 EOX CC BY 4.0",d:"Three-year baseline. Many illegal mining expansions began after 2021."},
-  {id:"s2_2019",n:"Sentinel-2 Cloudless 2019",c:"Sentinel-2 (10m)",nz:14,
-   u:function(){return"https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2019_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg";},
-   a:"Sentinel-2 cloudless \u00a9 EOX CC BY 4.0",d:"Five-year baseline. Pre-pandemic state — compare against 2024 for 5 years of change evidence."},
-  {id:"s2_2018",n:"Sentinel-2 Cloudless 2018",c:"Sentinel-2 (10m)",nz:14,
-   u:function(){return"https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2018_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg";},
-   a:"Sentinel-2 cloudless \u00a9 EOX CC BY 4.0",d:"Six-year baseline. Many sites were untouched forest in 2018. Powerful before/after proof."},
+  // ── SENTINEL-2 via HLS (Harmonized Landsat Sentinel — 30m, every 2-3 days) ──
+  {id:"hls_s30",cat:"sentinel",name:"Sentinel-2 True Color (HLS)",desc:"Sentinel-2 MSI via NASA HLS. 30m resolution, 2-3 day revisit. PRIMARY for NDVI change detection.",sat:"Sentinel-2A/B/C",res:"30m",
+    url:function(d){return gibs("HLS_S30_Nadir_BRDF_Adjusted_Reflectance",d,"png",13);},mz:13,attr:"NASA HLS | Sentinel-2 MSI"},
+  {id:"hls_l30",cat:"sentinel",name:"Landsat 8/9 True Color (HLS)",desc:"Landsat OLI via NASA HLS. 30m, 16-day revisit per sat. Best for long-term historical comparison.",sat:"Landsat 8/9 OLI",res:"30m",
+    url:function(d){return gibs("HLS_L30_Nadir_BRDF_Adjusted_Reflectance",d,"png",13);},mz:13,attr:"NASA HLS | Landsat 8/9 OLI"},
 
-  // DAILY GLOBAL — guaranteed fresh, every day
-  {id:"viirs",n:"VIIRS Daily",c:"Daily Global (250m)",nz:9,
-   u:function(dt){return"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/"+dt+"/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";},
-   a:"NASA GIBS | VIIRS",d:"Yesterday\u2019s satellite view at 250m. Updated every 24h. Spot rapid overnight clearing activity."},
-  {id:"modis_t",n:"MODIS Terra Daily",c:"Daily Global (250m)",nz:9,
-   u:function(dt){return"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/"+dt+"/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";},
-   a:"NASA GIBS | Terra",d:"Morning pass (10:30AM local). 250m. Compare with Aqua afternoon for dual daily coverage."},
-  {id:"modis_a",n:"MODIS Aqua Daily",c:"Daily Global (250m)",nz:9,
-   u:function(dt){return"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Aqua_CorrectedReflectance_TrueColor/default/"+dt+"/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";},
-   a:"NASA GIBS | Aqua",d:"Afternoon pass. Different cloud patterns — doubles your chance of a clear daily view."},
+  // ── DAILY TRUE COLOR (Lower res but DAILY global coverage) ──
+  {id:"viirs_true",cat:"daily",name:"VIIRS True Color (Daily)",desc:"Daily global composite from Suomi-NPP VIIRS. 250m. Use for rapid day-to-day change monitoring.",sat:"Suomi-NPP VIIRS",res:"250m",
+    url:function(d){return gibs("VIIRS_SNPP_CorrectedReflectance_TrueColor",d);},mz:9,attr:"NASA GIBS | VIIRS"},
+  {id:"modis_terra",cat:"daily",name:"MODIS Terra True Color",desc:"Daily Terra satellite. 250m. Morning pass (~10:30 local). Cross-reference with Aqua for same-day comparison.",sat:"Terra MODIS",res:"250m",
+    url:function(d){return gibs("MODIS_Terra_CorrectedReflectance_TrueColor",d);},mz:9,attr:"NASA GIBS | MODIS Terra"},
+  {id:"modis_aqua",cat:"daily",name:"MODIS Aqua True Color",desc:"Daily Aqua satellite. 250m. Afternoon pass (~1:30 local). Different cloud patterns than Terra.",sat:"Aqua MODIS",res:"250m",
+    url:function(d){return gibs("MODIS_Aqua_CorrectedReflectance_TrueColor",d);},mz:9,attr:"NASA GIBS | MODIS Aqua"},
+  {id:"noaa20_true",cat:"daily",name:"NOAA-20 VIIRS True Color",desc:"Daily composite from NOAA-20. Crosses 50min before Suomi-NPP, different cloud timing.",sat:"NOAA-20 VIIRS",res:"250m",
+    url:function(d){return gibs("NOAA20_VIIRS_CorrectedReflectance_TrueColor",d);},mz:9,attr:"NASA GIBS | NOAA-20 VIIRS"},
 
-  // FALSE COLOR — Mining detection bands
-  {id:"bare",n:"Bare Soil / Fire (7-2-1)",c:"Analysis Bands",nz:9,
-   u:function(dt){return"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_Bands721/default/"+dt+"/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";},
-   a:"NASA GIBS | MODIS SWIR",d:"Excavated soil = CYAN, vegetation = GREEN, water = BLACK, fire = RED. The #1 false-color layer for mining detection."},
-  {id:"veg",n:"Vegetation & Water (3-6-7)",c:"Analysis Bands",nz:9,
-   u:function(dt){return"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_Bands367/default/"+dt+"/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg";},
-   a:"NASA GIBS | MODIS Blue-SWIR",d:"Healthy vegetation = BRIGHT GREEN, cleared ground = TAN, water = BLUE. Tracks deforestation and water pollution from mining."},
+  // ── FALSE COLOR / MINING DETECTION (Key bands for bare soil, vegetation loss, water) ──
+  {id:"modis_721",cat:"detection",name:"MODIS Bands 7-2-1 (Fire/Bare Soil)",desc:"SWIR-NIR-Red. Bare soil = CYAN, vegetation = GREEN, water = BLACK, fire = RED/ORANGE. Essential for spotting excavation.",sat:"Terra MODIS",res:"250m",
+    url:function(d){return gibs("MODIS_Terra_CorrectedReflectance_Bands721",d);},mz:9,attr:"NASA GIBS | MODIS 7-2-1"},
+  {id:"modis_367",cat:"detection",name:"MODIS Bands 3-6-7 (Vegetation/Water)",desc:"Blue-SWIR-SWIR. Land = TAN/BROWN, vegetation = BRIGHT GREEN, water = BLUE/BLACK. Tracks deforestation and water turbidity.",sat:"Terra MODIS",res:"250m",
+    url:function(d){return gibs("MODIS_Terra_CorrectedReflectance_Bands367",d);},mz:9,attr:"NASA GIBS | MODIS 3-6-7"},
+  {id:"viirs_m11i2i1",cat:"detection",name:"VIIRS Bands M11-I2-I1 (Burn/Soil)",desc:"SWIR-NIR-Red. Burns/bare soil = RED/MAGENTA, healthy veg = GREEN, water = DARK. Reveals cleared mining areas.",sat:"Suomi-NPP VIIRS",res:"250m",
+    url:function(d){return gibs("VIIRS_SNPP_CorrectedReflectance_BandsM11-I2-I1",d);},mz:9,attr:"NASA GIBS | VIIRS M11-I2-I1"},
+  {id:"viirs_m3i3m11",cat:"detection",name:"VIIRS Bands M3-I3-M11 (Snow/Ice/Water)",desc:"Vis-SWIR-SWIR. Ice/snow = RED, vegetation = GREEN, bare soil = CYAN, water = BLACK. Maps water contamination.",sat:"Suomi-NPP VIIRS",res:"250m",
+    url:function(d){return gibs("VIIRS_SNPP_CorrectedReflectance_BandsM3-I3-M11",d);},mz:9,attr:"NASA GIBS | VIIRS M3-I3-M11"},
 
-  // REFERENCE
-  {id:"osm",n:"OpenStreetMap",c:"Reference",nz:19,
-   u:function(){return"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";},
-   a:"\u00a9 OpenStreetMap",d:"Roads, rivers, borders, place names. Essential geographic context."},
-  {id:"dark",n:"Dark Basemap",c:"Reference",nz:19,
-   u:function(){return"https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";},
-   a:"\u00a9 CartoDB",d:"Minimal dark map. Clean presentation backdrop."},
-  {id:"topo",n:"Topographic",c:"Reference",nz:17,
-   u:function(){return"https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png";},
-   a:"OpenTopoMap",d:"Elevation contours, terrain shading. Shows valleys, ridges, water drainage around mining sites."},
+  // ── NIGHTTIME / LIGHTS (Detect activity in remote areas at night) ──
+  {id:"viirs_night",cat:"night",name:"VIIRS Nighttime Imagery (DNB)",desc:"Day/Night Band. Shows city lights, camp fires, gas flares, mining ops lights. KEY indicator of illegal activity in remote areas.",sat:"Suomi-NPP VIIRS",res:"500m",
+    url:function(d){return gibs("VIIRS_SNPP_DayNightBand_ENCC",d,"png");},mz:8,attr:"NASA GIBS | VIIRS DNB"},
+  {id:"viirs_blackmarble",cat:"night",name:"Black Marble Night Lights",desc:"Anthropogenic lights only (no moonlight/aurora). Shows human settlement patterns. New lights in remote areas = mining camps.",sat:"Suomi-NPP VIIRS",res:"500m",
+    url:function(d){return gibs("VIIRS_SNPP_DayNightBand_At_Sensor_Radiance",d,"png");},mz:8,attr:"NASA GIBS | Black Marble"},
+  {id:"viirs_night_color",cat:"night",name:"Black Marble Blue/Yellow",desc:"False color: city lights = YELLOW, clouds = BLUE. Easier to distinguish human activity from natural features at night.",sat:"Suomi-NPP VIIRS",res:"500m",
+    url:function(d){return gibs("VIIRS_SNPP_DayNightBand_AtSensor_M15",d,"png");},mz:8,attr:"NASA GIBS | VIIRS Night Color"},
+
+  // ── VEGETATION INDEX (Track deforestation/clearing for mining) ──
+  {id:"modis_ndvi",cat:"vegetation",name:"MODIS NDVI (8-day)",desc:"Normalized Difference Vegetation Index. GREEN = healthy veg, BROWN/RED = bare soil/cleared. Monitor vegetation loss over time.",sat:"Terra MODIS",res:"250m",
+    url:function(){return gibs("MODIS_Terra_NDVI_8Day",gDate(10),"png");},mz:9,attr:"NASA GIBS | MODIS NDVI"},
+  {id:"modis_evi",cat:"vegetation",name:"MODIS EVI (8-day)",desc:"Enhanced Vegetation Index. More sensitive than NDVI in high-biomass areas (tropical forests where illegal mining occurs).",sat:"Terra MODIS",res:"250m",
+    url:function(){return gibs("MODIS_Terra_EVI_8Day",gDate(10),"png");},mz:9,attr:"NASA GIBS | MODIS EVI"},
+
+  // ── THERMAL / TEMPERATURE (Heat signatures from machinery, fires) ──
+  {id:"modis_lst_day",cat:"thermal",name:"Land Surface Temp (Day)",desc:"Daytime surface temperature. Hot spots may indicate machinery, processing operations, or burning at mining sites.",sat:"Terra MODIS",res:"1km",
+    url:function(){return gibs("MODIS_Terra_Land_Surface_Temp_Day_8Day",gDate(10),"png");},mz:7,attr:"NASA GIBS | MODIS LST Day"},
+  {id:"modis_lst_night",cat:"thermal",name:"Land Surface Temp (Night)",desc:"Nighttime surface temperature. Persistent heat at night in remote areas = industrial/mining activity.",sat:"Terra MODIS",res:"1km",
+    url:function(){return gibs("MODIS_Terra_Land_Surface_Temp_Night_8Day",gDate(10),"png");},mz:7,attr:"NASA GIBS | MODIS LST Night"},
+
+  // ── REFERENCE BASEMAPS ──
+  {id:"osm",cat:"reference",name:"OpenStreetMap",desc:"Reference map showing roads, rivers, boundaries, settlements. Overlay with satellite for context.",sat:"Community",res:"Vector",
+    url:function(){return "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";},mz:19,attr:"\u00a9 OpenStreetMap"},
+  {id:"carto_dark",cat:"reference",name:"Dark Basemap",desc:"Minimal dark map. Best base for overlaying bright satellite layers or night lights data.",sat:"CartoDB",res:"Vector",
+    url:function(){return "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";},mz:19,attr:"\u00a9 CartoDB"},
 ];
 
-/* Sentinel/Landsat analysis — embedded in iframe */
-function eoUrl(mode,lat,lng){
-  var t=gd(0),f=gd(60);
-  var b="https://apps.sentinel-hub.com/eo-browser/?zoom=13&lat="+lat+"&lng="+lng+"&fromTime="+f+"T00:00:00.000Z&toTime="+t+"T23:59:59.999Z&themeId=DEFAULT-THEME";
-  var m={s2:b+"&datasetId=S2L2A&layerId=1_TRUE_COLOR",s2f:b+"&datasetId=S2L2A&layerId=2_FALSE_COLOR",
-    ndvi:b+"&datasetId=S2L2A&layerId=3_NDVI",ndwi:b+"&datasetId=S2L2A&layerId=5_NDWI",moist:b+"&datasetId=S2L2A&layerId=4_MOISTURE_INDEX",
-    sar:b+"&datasetId=S1GRD&layerId=1_TRUE_COLOR",l8:b+"&datasetId=AWS_LOTL2&layerId=1_TRUE_COLOR",therm:b+"&datasetId=AWS_LOTL2&layerId=4_THERMAL"};
-  return m[mode]||b;
-}
-
-var SMODES=[
-  {id:"s2",nm:"Sentinel-2 True Color",ic:"\ud83d\udef0\ufe0f",col:"#a855f7",sat:"Sentinel-2 MSI",res:"10m",d:"Crystal clear 10m optical. Best free high-res source for identifying mining pits, roads, and equipment."},
-  {id:"s2f",nm:"Sentinel-2 False Color",ic:"\ud83d\udd34",col:"#ef4444",sat:"Sentinel-2 MSI",res:"10m",d:"Vegetation = RED, bare soil = GREY/CYAN. Cleared mining areas pop out immediately against red forest."},
-  {id:"ndvi",nm:"NDVI Vegetation Health",ic:"\ud83c\udf3f",col:"#22c55e",sat:"Sentinel-2 MSI",res:"10m",d:"Green = healthy vegetation, Brown = stressed/cleared. Quantitative proof of mining-driven deforestation."},
-  {id:"ndwi",nm:"NDWI Water Detection",ic:"\ud83d\udca7",col:"#3b82f6",sat:"Sentinel-2 MSI",res:"10m",d:"Water bodies, tailings ponds, turbid rivers. Monitors contamination spreading downstream from mining."},
-  {id:"moist",nm:"Moisture Index",ic:"\ud83c\udf0a",col:"#06b6d4",sat:"Sentinel-2 MSI",res:"20m",d:"Detects wet areas from hydraulic mining operations and drainage pattern changes."},
-  {id:"sar",nm:"Sentinel-1 SAR Radar",ic:"\ud83d\udce1",col:T.warn,sat:"Sentinel-1 C-SAR",res:"10m",d:"Radar penetrates clouds and works at NIGHT. Sees terrain, equipment, structures through any weather. Essential for tropical regions."},
-  {id:"l8",nm:"Landsat 8/9",ic:"\ud83c\udf0d",col:T.info,sat:"Landsat OLI",res:"30m",d:"30m with 50-year archive. Historical baselines going back to the 1970s for long-term change evidence."},
-  {id:"therm",nm:"Landsat Thermal",ic:"\ud83d\udd25",col:T.danger,sat:"Landsat TIRS",res:"100m",d:"Heat signatures from machinery, smelting, burning. Visible through vegetation canopy, day and night."},
+var LAYER_CATS = [
+  {id:"optical",name:"High-Resolution Optical",icon:"\ud83d\uddfa\ufe0f",color:T.accent,desc:"Crystal clear satellite photos for visual inspection"},
+  {id:"sentinel",name:"Sentinel-2 / Landsat (HLS)",icon:"\ud83d\udef0\ufe0f",color:"#a855f7",desc:"30m multispectral from ESA Sentinel-2 and NASA Landsat via HLS"},
+  {id:"daily",name:"Daily Global Coverage",icon:"\ud83c\udf0d",color:T.info,desc:"250m imagery updated every day from MODIS and VIIRS"},
+  {id:"detection",name:"False Color (Mining Detection)",icon:"\ud83d\udd0d",color:T.warning,desc:"Special band combinations that reveal bare soil, cleared land, and water"},
+  {id:"night",name:"Nighttime / Lights",icon:"\ud83c\udf19",color:"#c084fc",desc:"Detect human activity at night in remote mining areas"},
+  {id:"vegetation",name:"Vegetation Index (NDVI/EVI)",icon:"\ud83c\udf3f",color:"#22c55e",desc:"Track deforestation and land clearing from mining operations"},
+  {id:"thermal",name:"Thermal / Heat Signatures",icon:"\ud83d\udd25",color:T.danger,desc:"Surface temperature anomalies from machinery and processing"},
+  {id:"reference",name:"Reference Maps",icon:"\ud83d\udccd",color:T.textDim,desc:"Basemaps for geographic context"},
 ];
 
-/* ── COMPONENTS ── */
+/* ─── SHARED COMPONENTS ─── */
 
-function MapEvents({onMove}){
-  useMapEvents({moveend:function(e){var m=e.target;onMove({z:m.getZoom(),lat:m.getCenter().lat.toFixed(4),lng:m.getCenter().lng.toFixed(4)});},
-    zoomend:function(e){var m=e.target;onMove({z:m.getZoom(),lat:m.getCenter().lat.toFixed(4),lng:m.getCenter().lng.toFixed(4)});}});
-  return null;
-}
+function ChangeView({center,zoom}){var map=useMap();useEffect(function(){if(center)map.flyTo(center,zoom||map.getZoom(),{duration:1});},
+[center,zoom,map]);return null;}
 
-function FlyTo({center,zoom}){var map=useMap();
-  useEffect(function(){if(center)map.flyTo(center,zoom||10,{duration:1.2});},[center,zoom,map]);
-  return null;
-}
+function createIcon(status){var c=status==="critical"?"#ff2d55":status==="warning"?"#ffaa00":"#00d4aa";
+return L.divIcon({className:"",iconSize:[24,24],iconAnchor:[12,12],popupAnchor:[0,-14],
+html:'<div style="width:24px;height:24px;border-radius:50%;background:'+c+'22;border:2px solid '+c+';display:flex;align-items:center;justify-content:center;box-shadow:0 0 12px '+c+'66;"><div style="width:8px;height:8px;border-radius:50%;background:'+c+';"></div></div>'});}
 
-function mkIcon(st){var c=st==="critical"?"#ff2d55":st==="warning"?"#ffaa00":"#00d4aa";
-  return L.divIcon({className:"",iconSize:[28,28],iconAnchor:[14,14],popupAnchor:[0,-16],
-    html:'<div style="width:28px;height:28px;border-radius:50%;background:'+c+'18;border:2px solid '+c+';display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px '+c+'44,0 0 6px '+c+'"><div style="width:10px;height:10px;border-radius:50%;background:'+c+'"></div></div>'});}
+function Sparkline({data,color,height}){height=height||32;var mx=Math.max.apply(null,data),mn=Math.min.apply(null,data),rng=mx-mn||1;
+var pts=data.map(function(v,i){return((i/(data.length-1))*100)+","+(height-((v-mn)/rng)*(height-4)-2);}).join(" ");
+return React.createElement("svg",{viewBox:"0 0 100 "+height,style:{width:"100%",height:height},preserveAspectRatio:"none"},
+React.createElement("polyline",{points:pts,fill:"none",stroke:color,strokeWidth:"2",strokeLinecap:"round",strokeLinejoin:"round"}));}
 
-function Spark({data,color,h}){h=h||28;var mx=Math.max.apply(null,data),mn=Math.min.apply(null,data),r=mx-mn||1;
-  var p=data.map(function(v,i){return((i/(data.length-1))*100)+","+(h-((v-mn)/r)*(h-4)-2);}).join(" ");
-  return React.createElement("svg",{viewBox:"0 0 100 "+h,style:{width:"100%",height:h},preserveAspectRatio:"none"},
-    React.createElement("polyline",{points:p,fill:"none",stroke:color,strokeWidth:"2",strokeLinecap:"round",strokeLinejoin:"round"}));}
+function BarChart({data,maxVal}){return(<div style={{display:"flex",alignItems:"flex-end",gap:6,height:120,padding:"0 4px"}}>
+{data.map(function(d,i){return(<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+<span style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{d.value}</span>
+<div style={{width:"100%",borderRadius:"3px 3px 0 0",height:(d.value/maxVal)*90+"px",background:d.color||T.accent,transition:"height 0.6s",opacity:0.85}}/>
+<span style={{fontSize:9,color:T.textDim,fontFamily:mono}}>{d.label}</span></div>);})}</div>);}
 
-function Bars({data,mx}){return(<div style={{display:"flex",alignItems:"flex-end",gap:6,height:110,padding:"0 4px"}}>
-  {data.map(function(d,i){return(<div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-    <span style={{fontSize:10,color:T.textDim,fontFamily:M}}>{d.v}</span>
-    <div style={{width:"100%",borderRadius:"3px 3px 0 0",height:Math.max(4,(d.v/mx)*90)+"px",background:d.c||T.accent,opacity:0.85}}/>
-    <span style={{fontSize:9,color:T.textDim,fontFamily:M}}>{d.l}</span></div>)})}</div>);}
+function AnimNum({target}){var s=useState(0),v=s[0],setV=s[1];
+useEffect(function(){var c=0,st=target/75;var t=setInterval(function(){c+=st;if(c>=target){setV(target);clearInterval(t);}else setV(Math.floor(c));},16);
+return function(){clearInterval(t);};},
+[target]);return v.toLocaleString();}
 
-function Num({n}){var s=useState(0),v=s[0],set=s[1];
-  useEffect(function(){var c=0,st=n/60;var t=setInterval(function(){c+=st;if(c>=n){set(n);clearInterval(t);}else set(Math.floor(c));},16);return function(){clearInterval(t);};},[n]);return v.toLocaleString();}
+function Badge({status}){var m={critical:["#ff2d55","#ff2d5522","#ff2d5544"],warning:["#ffaa00","#ffaa0022","#ffaa0044"],monitoring:["#00d4aa","#00d4aa22","#00d4aa44"],info:["#4488ff","#4488ff22","#4488ff44"]};
+var x=m[status]||m.info;return <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:700,letterSpacing:"0.05em",background:x[1],color:x[0],border:"1px solid "+x[2],textTransform:"uppercase",fontFamily:mono}}>{status}</span>;}
 
-function Bdg({s}){var m={critical:["#ff2d55","#ff2d5518","#ff2d5544"],warning:["#ffaa00","#ffaa0018","#ffaa0044"],monitoring:["#00d4aa","#00d4aa18","#00d4aa44"],info:["#4488ff","#4488ff18","#4488ff44"]};
-  var x=m[s]||m.info;return <span style={{padding:"3px 10px",borderRadius:4,fontSize:9,fontWeight:700,letterSpacing:"0.06em",background:x[1],color:x[0],border:"1px solid "+x[2],textTransform:"uppercase",fontFamily:M}}>{s}</span>;}
+function Meter({value}){var c=value>=90?"#00d4aa":value>=80?"#ffaa00":"#ff6b35";
+return(<div style={{display:"flex",alignItems:"center",gap:6}}><div style={{flex:1,height:4,background:"#1a2a3a",borderRadius:2,overflow:"hidden"}}>
+<div style={{width:value+"%",height:"100%",background:c,borderRadius:2,transition:"width 0.8s"}}/></div>
+<span style={{fontSize:11,fontFamily:mono,color:c,fontWeight:600}}>{value}%</span></div>);}
 
-function Mtr({v}){var c=v>=90?"#00d4aa":v>=80?"#ffaa00":"#ff6b35";
-  return(<div style={{display:"flex",alignItems:"center",gap:6}}><div style={{flex:1,height:5,background:"#1a2a3a",borderRadius:3,overflow:"hidden"}}>
-    <div style={{width:v+"%",height:"100%",background:c,borderRadius:3}}/></div>
-    <span style={{fontSize:11,fontFamily:M,color:c,fontWeight:700}}>{v}%</span></div>);}
+function Lbl({children}){return <div style={{fontSize:10,color:T.textDim,fontFamily:mono,textTransform:"uppercase",letterSpacing:"0.08em"}}>{children}</div>;}
+function Card({children,style}){return <div style={Object.assign({background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:14},style||{})}>{children}</div>;}
 
-var Lbl=function({children}){return <div style={{fontSize:10,color:T.textDim,fontFamily:M,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>{children}</div>;};
-var Crd=function({children,style}){return <div style={Object.assign({background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:16},style||{})}>{children}</div>;};
-var Btn=function({children,active,onClick,style}){return <button onClick={onClick} style={Object.assign({padding:"7px 14px",borderRadius:6,fontFamily:M,fontSize:10,fontWeight:700,cursor:"pointer",transition:"all 0.15s",background:active?T.accentDim:"transparent",border:active?"1px solid "+T.accent:"1px solid "+T.border,color:active?T.accent:T.textSec},style||{})}>{children}</button>;};
+/* ═══════════════════════════════════════════════════
+   SATELLITE MAP — Multi-source, supports overlays
+   ═══════════════════════════════════════════════════ */
 
-/* ═══════════════════════════════════════
-   SATELLITE MAP — Proper zoom handling
-   
-   MapContainer: maxZoom=21 (FIXED, never changes)
-   TileLayer: maxNativeZoom=nz, maxZoom=21
-   Result: Leaflet upscales past nz. Never black.
-   ═══════════════════════════════════════ */
-
-function SatMap({regions,sel,onSel,h,z,lid,date,showInfo,onMapMove}){
-  h=h||480;z=z||3;lid=lid||"google";
-  var cn=sel?[sel.lat,sel.lng]:[0,10];
-  var md=date||gd(1);
+function SatMap({regions,selected,onSelect,height,zoom,showCtrl,layerId,date,overlayId}){
+  height=height||440;zoom=zoom||3;layerId=layerId||"esri_world";
+  var center=selected?[selected.lat,selected.lng]:[0,10];
+  var mapDate=date||gDate(1);
+  var base=SAT_LAYERS.find(function(l){return l.id===layerId;})||SAT_LAYERS[0];
+  var overlay=overlayId?SAT_LAYERS.find(function(l){return l.id===overlayId;}):null;
 
   return(
-    <MapContainer center={cn} zoom={z} maxZoom={21} minZoom={2}
-      style={{width:"100%",height:h,borderRadius:10,border:"1px solid "+T.border}}
-      scrollWheelZoom={true} zoomControl={true} doubleClickZoom={true} zoomSnap={0.5} zoomDelta={0.5}>
-      <FlyTo center={cn} zoom={sel?Math.max(z,8):z}/>
-      {onMapMove&&<MapEvents onMove={onMapMove}/>}
-
-      {/* Single active tile layer — maxNativeZoom enables upscaling past native res */}
-      <TileLayer key={lid} url={(LAYERS.find(function(ly){return ly.id===lid;})||LAYERS[0]).u(md)}
-        attribution={(LAYERS.find(function(ly){return ly.id===lid;})||LAYERS[0]).a}
-        maxNativeZoom={(LAYERS.find(function(ly){return ly.id===lid;})||LAYERS[0]).nz}
-        maxZoom={21}/>
-
+    <MapContainer center={center} zoom={zoom} style={{width:"100%",height:height,borderRadius:8,border:"1px solid "+T.border}} scrollWheelZoom={true} zoomControl={false}>
+      <ChangeView center={center} zoom={selected?Math.max(zoom,5):zoom}/>
+      {showCtrl?(
+        <LayersControl position="topright">
+          {SAT_LAYERS.map(function(layer){return(
+            <LayersControl.BaseLayer key={layer.id} checked={layer.id===layerId} name={layer.name+" ["+layer.sat+"]"}>
+              <TileLayer url={layer.url(mapDate)} attribution={layer.attr} maxZoom={layer.mz}/>
+            </LayersControl.BaseLayer>);})}
+        </LayersControl>
+      ):(
+        <TileLayer url={base.url(mapDate)} attribution={base.attr} maxZoom={base.mz}/>
+      )}
+      {overlay&&<TileLayer url={overlay.url(mapDate)} attribution={overlay.attr} maxZoom={overlay.mz} opacity={0.6}/>}
       {regions&&regions.map(function(r){return(
-        <Marker key={r.id} position={[r.lat,r.lng]} icon={mkIcon(r.status)}
-          eventHandlers={{click:function(){if(onSel)onSel(r);}}}>
-          <Popup maxWidth={280}><div style={{fontFamily:F,fontSize:12,lineHeight:1.7,minWidth:220}}>
-            <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>{r.name}</div>
-            <span style={{color:r.status==="critical"?"#ff2d55":r.status==="warning"?"#cc8800":"#009977",fontWeight:700,textTransform:"uppercase",fontSize:10,background:r.status==="critical"?"#ff2d5515":"#00d4aa15",padding:"2px 6px",borderRadius:3}}>{r.status}</span>
-            <div style={{marginTop:6}}>
-              <div>Alerts: <strong>{r.alerts}</strong> | Confidence: <strong>{r.confidence}%</strong></div>
-              <div>Type: {r.type}</div>
-              <div>Area: {r.area}</div>
-              {r.ndviDelta!=null&&<div style={{marginTop:4,borderTop:"1px solid #eee",paddingTop:4}}>
-                {"\u0394"}NDVI: <strong style={{color:"#cc3333"}}>{r.ndviDelta}</strong> | Heat: <strong>{r.heatAnomaly}{"\u00b0C"}</strong><br/>
-                Veg Loss: <strong>{r.vegetationLossHa}ha</strong> | Turbidity: <strong>{r.waterTurbidityRise}</strong></div>}
-            </div>
+        <Marker key={r.id} position={[r.lat,r.lng]} icon={createIcon(r.status)} eventHandlers={{click:function(){if(onSelect)onSelect(r);}}}>
+          <Popup><div style={{fontFamily:sans,fontSize:12,lineHeight:1.6,minWidth:180}}>
+            <strong style={{fontSize:13}}>{r.name}</strong><br/>
+            <span style={{color:r.status==="critical"?"#ff2d55":r.status==="warning"?"#cc8800":"#009977",fontWeight:700,textTransform:"uppercase",fontSize:10}}>{r.status}</span><br/>
+            Alerts: <strong>{r.alerts}</strong> | Conf: {r.confidence}%<br/>Type: {r.type}
+            {r.ndviDelta!=null&&<><br/>NDVI: <strong style={{color:"#cc3333"}}>{r.ndviDelta}</strong> | Heat: {r.heatAnomaly}{"\u00b0C"}</>}
           </div></Popup>
-          {r.status==="critical"&&<Circle center={[r.lat,r.lng]} radius={50000}
-            pathOptions={{color:"#ff2d55",fillColor:"#ff2d55",fillOpacity:0.05,weight:1,dashArray:"6 4"}}/>}
+          {r.status==="critical"&&<Circle center={[r.lat,r.lng]} radius={50000} pathOptions={{color:"#ff2d55",fillColor:"#ff2d55",fillOpacity:0.08,weight:1}}/>}
         </Marker>);})}
     </MapContainer>);
 }
 
-/* ═══════════════════════════
-   IMAGERY LAB
-   ═══════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   TAB: IMAGERY LAB — Full satellite analysis tool
+   ═══════════════════════════════════════════════════ */
 
-function ImageryLab({sel,setSel}){
-  var _l=useState("google"),lid=_l[0],sL=_l[1];
-  var _d=useState(1),doff=_d[0],sD=_d[1];
-  var _v=useState("map"),vw=_v[0],sV=_v[1];
-  var _am=useState(null),am=_am[0],sAM=_am[1];
-  var _mi=useState({z:3,lat:"0.0000",lng:"0.0000"}),mi=_mi[0],sMi=_mi[1];
-  var rg=sel||MONITORED_REGIONS[0];
-  var md=gd(doff);
-  var act=LAYERS.find(function(l){return l.id===lid;})||LAYERS[0];
-  var cats=[...new Set(LAYERS.map(function(t){return t.c;}))];
+function ImageryLabTab({selectedRegion,setSelectedRegion}){
+  var _l=useState("esri_world"),layerId=_l[0],setLayerId=_l[1];
+  var _o=useState(""),overlayId=_o[0],setOverlayId=_o[1];
+  var _d=useState(1),dateOff=_d[0],setDateOff=_d[1];
+  var _c=useState("all"),cat=_c[0],setCat=_c[1];
+  var _cmp=useState(false),compare=_cmp[0],setCompare=_cmp[1];
+  var _l2=useState("viirs_night"),layerId2=_l2[0],setLayerId2=_l2[1];
 
-  return(<div style={{paddingTop:16}}>
-    {/* Region pills */}
-    <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:12}}>
-      {MONITORED_REGIONS.map(function(r){return(
-        <button key={r.id} onClick={function(){setSel(r);}} style={{
-          padding:"5px 12px",borderRadius:20,fontFamily:M,fontSize:9,fontWeight:600,cursor:"pointer",
-          background:rg.id===r.id?T.accentDim:T.bgInput,
-          border:rg.id===r.id?"1px solid "+T.accent:"1px solid "+T.border,
-          color:rg.id===r.id?T.accent:T.textDim}}>
-          {r.status==="critical"&&<span style={{color:T.danger,marginRight:3}}>{"\u25cf"}</span>}
-          {r.name.split(",")[0]}</button>);})}
-    </div>
+  var region=selectedRegion||MONITORED_REGIONS[0];
+  var mapDate=gDate(dateOff);
+  var activeLayer=SAT_LAYERS.find(function(l){return l.id===layerId;})||SAT_LAYERS[0];
+  var filteredLayers=cat==="all"?SAT_LAYERS:SAT_LAYERS.filter(function(l){return l.cat===cat;});
 
-    {/* View mode tabs */}
-    <div style={{display:"flex",gap:6,marginBottom:14}}>
-      {[{id:"map",lb:"Map Viewer",sub:LAYERS.length+" layers \u2022 Full zoom"},
-        {id:"sentinel",lb:"Sentinel Analysis",sub:"S1 SAR \u2022 S2 \u2022 Landsat \u2022 NDVI"},
-        {id:"tools",lb:"Intelligence Tools",sub:"GEE \u2022 FIRMS \u2022 Worldview"}
-      ].map(function(m){return(
-        <button key={m.id} onClick={function(){sV(m.id);sAM(null);}} style={{
-          flex:1,padding:"12px 16px",borderRadius:8,textAlign:"left",cursor:"pointer",transition:"all 0.15s",
-          background:vw===m.id?"linear-gradient(135deg,"+T.accentDim+","+T.bgCard+")":T.bgCard,
-          border:vw===m.id?"1px solid "+T.accent:"1px solid "+T.border,color:vw===m.id?T.accent:T.textSec,fontFamily:M,fontSize:11,fontWeight:700}}>
-          <div>{m.lb}</div>
-          <div style={{fontSize:9,fontWeight:400,color:T.textDim,marginTop:3}}>{m.sub}</div>
-        </button>);})}
-    </div>
-
-    {/* ═══ MAP VIEW ═══ */}
-    {vw==="map"&&(<div>
-      {/* Custom layer switcher */}
-      {cats.map(function(cat){
-        var items=LAYERS.filter(function(t){return t.c===cat;});
-        return(<div key={cat} style={{display:"flex",gap:4,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-          <span style={{fontSize:9,color:T.textDim,fontFamily:M,minWidth:110,fontWeight:600}}>{cat}</span>
-          {items.map(function(t){var on=t.id===lid;return(
-            <Btn key={t.id} active={on} onClick={function(){sL(t.id);}}>
-              {t.n.replace("Sentinel-2 Cloudless ","S2 ").replace("Google ","G/").replace("MODIS ","").replace("VIIRS ","V/").replace("ESRI ","E/")}</Btn>);})}
-        </div>);})}
-
-      {/* Date slider for daily/analysis layers */}
-      {(act.c.includes("Daily")||act.c.includes("Analysis"))&&(
-        <div style={{display:"flex",alignItems:"center",gap:12,margin:"8px 0 10px",background:T.bgInput,borderRadius:8,padding:"8px 14px",border:"1px solid "+T.border}}>
-          <Lbl style={{marginBottom:0}}>Date</Lbl>
-          <input type="range" min={1} max={30} value={doff} onChange={function(e){sD(Number(e.target.value));}} style={{flex:1,accentColor:T.accent}}/>
-          <span style={{fontFamily:M,fontSize:12,color:T.accent,fontWeight:600}}>{md}</span>
-        </div>)}
-
-      {/* Map */}
-      <Crd style={{padding:8,marginBottom:10}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"0 4px"}}>
-          <div>
-            <span style={{fontSize:14,fontWeight:700}}>{act.n}</span>
-            <span style={{fontSize:10,color:T.textDim,marginLeft:10}}>Zoom: <strong style={{color:T.accent}}>{mi.z}</strong></span>
-            <span style={{fontSize:10,color:T.textDim,marginLeft:10}}>{mi.lat}{"\u00b0"}, {mi.lng}{"\u00b0"}</span>
-          </div>
-          <span style={{fontSize:9,fontFamily:M,color:T.info,background:T.info+"15",padding:"3px 10px",borderRadius:4,fontWeight:600}}>
-            {act.c} | Native zoom: {act.nz} | Max: 21</span>
-        </div>
-        <SatMap regions={MONITORED_REGIONS} sel={rg} onSel={setSel}
-          h={520} z={10} lid={lid} date={md} showInfo={true} onMapMove={sMi}/>
-      </Crd>
-
-      {/* Layer description */}
-      <div style={{fontSize:11,color:T.textSec,lineHeight:1.6,padding:"10px 14px",background:T.bgInput,borderRadius:8,border:"1px solid "+T.border}}>
-        <strong style={{color:T.accent}}>{act.n}:</strong> {act.d}
-        {act.nz<15&&<span style={{color:T.textDim}}> This layer\u2019s native resolution is zoom {act.nz}. Zooming further will upscale (pixelate). Switch to Google or ESRI for max clarity at high zoom.</span>}
+  return(
+    <div style={{paddingTop:16}}>
+      {/* Region selector */}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+        {MONITORED_REGIONS.map(function(r){return(
+          <button key={r.id} onClick={function(){setSelectedRegion(r);}} style={{
+            padding:"5px 10px",borderRadius:6,fontFamily:mono,fontSize:9,fontWeight:700,cursor:"pointer",
+            background:region.id===r.id?T.accentDim:T.bgCard,
+            border:region.id===r.id?"1px solid "+T.accent:"1px solid "+T.border,
+            color:region.id===r.id?T.accent:T.textSecondary}}>{r.name.split(",")[0]}</button>);})}
       </div>
-    </div>)}
 
-    {/* ═══ SENTINEL ANALYSIS ═══ */}
-    {vw==="sentinel"&&!am&&(<div>
-      <Crd style={{marginBottom:14,background:"linear-gradient(135deg,#0c1a2888,#1a103888)",borderColor:"#a855f744"}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:52,height:52,borderRadius:12,background:"linear-gradient(135deg,#a855f7,#6366f1)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{"\ud83d\udef0\ufe0f"}</div>
-          <div>
-            <div style={{fontFamily:S,fontSize:20}}>Sentinel & Landsat Analysis</div>
-            <div style={{fontSize:11,color:T.textSec,marginTop:3}}>Full-resolution Sentinel-1 SAR, Sentinel-2 optical, Landsat thermal — embedded directly below. Each tool loads pre-configured for <strong style={{color:T.accent}}>{rg.name}</strong>.</div>
-          </div></div>
-      </Crd>
+      {/* Controls bar */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto auto",gap:10,marginBottom:12,alignItems:"end"}}>
+        <div><Lbl>Date ({mapDate})</Lbl>
+          <input type="range" min={1} max={60} value={dateOff} onChange={function(e){setDateOff(Number(e.target.value));}}
+            style={{width:"100%",marginTop:6,accentColor:T.accent}}/></div>
+        <div><Lbl>Overlay Layer (60% opacity)</Lbl>
+          <select value={overlayId} onChange={function(e){setOverlayId(e.target.value);}}
+            style={{width:"100%",borderRadius:6,background:T.bgInput,color:T.textPrimary,border:"1px solid "+T.border,padding:"7px",marginTop:4}}>
+            <option value="">None</option>
+            {SAT_LAYERS.map(function(l){return <option key={l.id} value={l.id}>{l.name}</option>;})}</select></div>
+        <button onClick={function(){setCompare(!compare);}} style={{
+          padding:"8px 14px",borderRadius:6,border:"none",fontFamily:mono,fontSize:11,fontWeight:700,cursor:"pointer",
+          background:compare?T.info:T.bgCard,color:compare?"#fff":T.textSecondary,
+          borderWidth:1,borderStyle:"solid",borderColor:compare?T.info:T.border}}>
+          {compare?"\u25a3 Split View ON":"\u25a1 Split View"}</button>
+        <a href={"https://worldview.earthdata.nasa.gov/?v="+(region.lng-3)+","+(region.lat-3)+","+(region.lng+3)+","+(region.lat+3)+"&t="+mapDate}
+          target="_blank" rel="noreferrer" style={{padding:"8px 14px",borderRadius:6,background:T.accent,color:"#010c14",fontFamily:mono,fontSize:11,fontWeight:700,textDecoration:"none",textAlign:"center"}}>
+          NASA Worldview {"\u2192"}</a>
+      </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:10}}>
-        {SMODES.map(function(m){return(
-          <div key={m.id} onClick={function(){sAM(m.id);}} style={{
-            background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:16,cursor:"pointer",
-            borderLeft:"4px solid "+m.col,transition:"all 0.15s"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-              <span style={{fontSize:22}}>{m.ic}</span>
-              <div style={{flex:1}}>
-                <div style={{fontSize:14,fontWeight:700}}>{m.nm}</div>
-                <div style={{fontSize:9,fontFamily:M,color:m.col}}>{m.sat} {"\u2022"} {m.res}</div></div>
-              <div style={{width:36,height:36,borderRadius:8,background:m.col+"12",border:"1px solid "+m.col+"44",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,color:m.col}}>{"\u2192"}</div>
+      {/* Map area */}
+      {compare?(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          <Card style={{padding:8}}>
+            <div style={{fontSize:10,fontFamily:mono,color:T.accent,marginBottom:6}}>{activeLayer.name}</div>
+            <SatMap key={"cmp1-"+region.id+layerId+dateOff} regions={[region]} selected={region} onSelect={function(){}} height={340} zoom={9} showCtrl={false} layerId={layerId} date={mapDate}/>
+          </Card>
+          <Card style={{padding:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{fontSize:10,fontFamily:mono,color:T.info}}>{(SAT_LAYERS.find(function(l){return l.id===layerId2;})||{}).name}</span>
+              <select value={layerId2} onChange={function(e){setLayerId2(e.target.value);}}
+                style={{borderRadius:4,background:T.bgInput,color:T.textPrimary,border:"1px solid "+T.border,padding:"2px 6px",fontSize:10}}>
+                {SAT_LAYERS.map(function(l){return <option key={l.id} value={l.id}>{l.name}</option>;})}</select>
             </div>
-            <div style={{fontSize:11,color:T.textSec,lineHeight:1.5}}>{m.d}</div>
+            <SatMap key={"cmp2-"+region.id+layerId2+dateOff} regions={[region]} selected={region} onSelect={function(){}} height={340} zoom={9} showCtrl={false} layerId={layerId2} date={mapDate}/>
+          </Card>
+        </div>
+      ):(
+        <Card style={{padding:8,marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontSize:11,fontWeight:700}}>{activeLayer.name} <span style={{color:T.textDim,fontWeight:400}}>| {activeLayer.sat} | {activeLayer.res}</span></span>
+            <div style={{display:"flex",gap:8}}>
+              <a href={"https://apps.sentinel-hub.com/eo-browser/?zoom=10&lat="+region.lat+"&lng="+region.lng+"&themeId=DEFAULT-THEME"} target="_blank" rel="noreferrer"
+                style={{fontSize:10,color:T.info,fontFamily:mono}}>EO Browser {"\u2192"}</a>
+              <span style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{mapDate}</span>
+            </div>
+          </div>
+          <SatMap key={"main-"+region.id+layerId+dateOff+overlayId} regions={MONITORED_REGIONS} selected={region} onSelect={setSelectedRegion}
+            height={420} zoom={8} showCtrl={false} layerId={layerId} date={mapDate} overlayId={overlayId||undefined}/>
+        </Card>
+      )}
+
+      {/* Layer info card */}
+      <Card style={{marginBottom:12,borderLeft:"3px solid "+(LAYER_CATS.find(function(c2){return c2.id===activeLayer.cat;})||{}).color}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"start"}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:700}}>{activeLayer.name}</div>
+            <div style={{fontSize:11,color:T.textSecondary,marginTop:4,lineHeight:1.5}}>{activeLayer.desc}</div>
+          </div>
+          <div style={{textAlign:"right",flexShrink:0,marginLeft:16}}>
+            <div style={{fontSize:10,color:T.textDim,fontFamily:mono}}>Resolution: <span style={{color:T.accent}}>{activeLayer.res}</span></div>
+            <div style={{fontSize:10,color:T.textDim,fontFamily:mono}}>Satellite: <span style={{color:T.info}}>{activeLayer.sat}</span></div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Category filters */}
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
+        <button onClick={function(){setCat("all");}} style={{padding:"4px 10px",borderRadius:5,fontSize:9,fontFamily:mono,fontWeight:700,cursor:"pointer",
+          background:cat==="all"?T.accentDim:T.bgInput,border:cat==="all"?"1px solid "+T.accent:"1px solid "+T.border,color:cat==="all"?T.accent:T.textDim}}>
+          ALL ({SAT_LAYERS.length})</button>
+        {LAYER_CATS.map(function(c2){var count=SAT_LAYERS.filter(function(l){return l.cat===c2.id;}).length;return(
+          <button key={c2.id} onClick={function(){setCat(c2.id);}} style={{padding:"4px 10px",borderRadius:5,fontSize:9,fontFamily:mono,fontWeight:700,cursor:"pointer",
+            background:cat===c2.id?c2.color+"22":T.bgInput,border:cat===c2.id?"1px solid "+c2.color:"1px solid "+T.border,color:cat===c2.id?c2.color:T.textDim}}>
+            {c2.icon} {c2.name} ({count})</button>);})}
+      </div>
+
+      {/* Layer grid */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:8}}>
+        {filteredLayers.map(function(l){var isActive=l.id===layerId;var catObj=LAYER_CATS.find(function(c2){return c2.id===l.cat;})||{};return(
+          <div key={l.id} onClick={function(){setLayerId(l.id);}} style={{
+            background:isActive?T.bgCardHover:T.bgCard,border:isActive?"1px solid "+T.accent:"1px solid "+T.border,
+            borderRadius:8,padding:12,cursor:"pointer",transition:"all 0.15s",borderLeft:"3px solid "+(isActive?T.accent:catObj.color||T.border)}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{fontSize:12,fontWeight:600,color:isActive?T.accent:T.textPrimary}}>{l.name}</span>
+              <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,background:catObj.color+"18",color:catObj.color,fontFamily:mono,fontWeight:700}}>{l.cat.toUpperCase()}</span>
+            </div>
+            <div style={{fontSize:10,color:T.textDim,lineHeight:1.4,marginBottom:6}}>{l.desc}</div>
+            <div style={{display:"flex",gap:12,fontSize:9,fontFamily:mono,color:T.textDim}}>
+              <span>Res: <strong style={{color:T.textSecondary}}>{l.res}</strong></span>
+              <span>Sat: <strong style={{color:T.textSecondary}}>{l.sat}</strong></span>
+            </div>
           </div>);})}
       </div>
-    </div>)}
-
-    {/* Sentinel embedded viewer */}
-    {vw==="sentinel"&&am&&(function(){
-      var m=SMODES.find(function(x){return x.id===am;})||SMODES[0];
-      var url=eoUrl(am,rg.lat,rg.lng);
-      return(<div>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-          <button onClick={function(){sAM(null);}} style={{padding:"8px 14px",borderRadius:6,background:T.bgInput,border:"1px solid "+T.border,color:T.textSec,cursor:"pointer",fontFamily:M,fontSize:11,fontWeight:600}}>{"\u2190"} Back</button>
-          <span style={{fontSize:20}}>{m.ic}</span>
-          <div style={{flex:1}}>
-            <div style={{fontSize:15,fontWeight:700}}>{m.nm}</div>
-            <div style={{fontSize:10,color:m.col,fontFamily:M}}>{m.sat} {"\u2022"} {m.res} {"\u2022"} {rg.name}</div></div>
-          <a href={url} target="_blank" rel="noreferrer" style={{padding:"8px 16px",borderRadius:6,background:m.col,color:"#fff",fontFamily:M,fontSize:11,fontWeight:700,textDecoration:"none"}}>Full Screen {"\u2192"}</a>
-        </div>
-        <div style={{borderRadius:10,overflow:"hidden",border:"2px solid "+m.col+"33",background:"#000"}}>
-          <iframe src={url} style={{width:"100%",height:600,border:"none"}} title={m.nm} allow="fullscreen"/>
-        </div>
-        <div style={{fontSize:11,color:T.textSec,marginTop:10,lineHeight:1.6,padding:"10px 14px",background:T.bgInput,borderRadius:8}}>
-          <strong style={{color:m.col}}>Reading this data:</strong> {m.d}
-          <br/><span style={{color:T.textDim}}>Use the date picker inside the viewer to select cloud-free dates. The viewer auto-selects the most recent available imagery for this location.</span>
-        </div>
-      </div>);
-    })()}
-
-    {/* ═══ TOOLS ═══ */}
-    {vw==="tools"&&(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:10}}>
-      {[
-        {n:"Google Earth Engine Timelapse",u:"https://earthengine.google.com/timelapse/#center="+rg.lat+","+rg.lng+",11",c:T.warn,ic:"\u23f1\ufe0f",d:"40+ years of mining expansion animated. The single most powerful free tool for demonstrating illegal mining growth to clients and regulators."},
-        {n:"NASA Worldview",u:"https://worldview.earthdata.nasa.gov/?v="+(rg.lng-2)+","+(rg.lat-2)+","+(rg.lng+2)+","+(rg.lat+2)+"&t="+gd(1),c:"#22c55e",ic:"\ud83c\udf0d",d:"1000+ NASA imagery layers. Download snapshots, compare dates, overlay fire data. Professional-grade evidence collection."},
-        {n:"NASA FIRMS Fire Detection",u:"https://firms.modaps.eosdis.nasa.gov/map/#d:today;@"+rg.lng+","+rg.lat+",10z",c:T.danger,ic:"\ud83d\udd25",d:"Real-time fire and thermal anomaly alerts. Illegal miners burn vegetation for clearing. Shows hotspots from the last 24 hours."},
-        {n:"Global Forest Watch",u:"https://www.globalforestwatch.org/map/?menu=eyJkYXRhc2V0Q2F0ZWdvcnkiOiIiLCJtZW51U2VjdGlvbiI6IiJ9",c:"#16a34a",ic:"\ud83c\udf32",d:"Weekly deforestation alerts from Landsat. Shows which areas lost tree cover recently. Mining is a top driver of tropical deforestation."},
-        {n:"Copernicus Browser",u:"https://browser.dataspace.copernicus.eu/?zoom=11&lat="+rg.lat+"&lng="+rg.lng,c:"#3b82f6",ic:"\ud83c\udf10",d:"ESA\u2019s official Copernicus data portal. Download full Sentinel-1/2/3 datasets. Custom processing and GeoTIFF export."},
-        {n:"Sentinel Hub EO Browser",u:eoUrl("s2",rg.lat,rg.lng),c:"#a855f7",ic:"\ud83d\udef0\ufe0f",d:"The industry-standard satellite viewer. Full Sentinel, Landsat, MODIS. Custom scripting, time-series analysis, and data export."},
-      ].map(function(t){return(
-        <a key={t.n} href={t.u} target="_blank" rel="noreferrer" style={{textDecoration:"none"}}>
-          <div style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:18,
-            borderLeft:"4px solid "+t.c,height:"100%",transition:"border-color 0.2s"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-              <span style={{fontSize:26}}>{t.ic}</span>
-              <div style={{fontSize:15,fontWeight:700,flex:1}}>{t.n}</div>
-              <span style={{fontSize:12,fontFamily:M,color:t.c}}>{"\u2192"}</span></div>
-            <div style={{fontSize:11,color:T.textSec,lineHeight:1.6}}>{t.d}</div>
-          </div></a>);})}
-    </div>)}
-  </div>);
+    </div>
+  );
 }
 
-/* ═══════════ OVERVIEW ═══════════ */
+/* ═══════════════════════════════════════════════
+   REMAINING TABS (kept from previous version)
+   ═══════════════════════════════════════════════ */
 
-function Overview({sel,setSel}){
+function OverviewTab({selectedRegion,setSelectedRegion}){
   return(<div style={{paddingTop:16}}>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:16}}>
-      {[{l:"Active Alerts",n:144,c:T.danger,d:[89,112,98,134,156,171],s:""},
-        {l:"Area Monitored",n:28700,c:T.info,d:[18,21,23,25,27,28.7],s:" km\u00b2"},
-        {l:"Detection Rate",n:94,c:T.accent,d:[88,89,91,92,93,94],s:"%"},
-        {l:"Regions",n:9,c:T.warn,d:[3,4,5,6,7,9],s:""}
-      ].map(function(x,i){return(<Crd key={i}><Lbl>{x.l}</Lbl>
-        <div style={{fontSize:28,fontWeight:700,color:x.c,fontFamily:M,lineHeight:1,margin:"8px 0"}}><Num n={x.n}/>{x.s}</div>
-        <Spark data={x.d} color={x.c}/></Crd>);})}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:16}}>
+      {[{label:"Active Alerts",value:144,color:T.danger,spark:[89,112,98,134,156,171],sfx:""},
+        {label:"Area Monitored",value:28700,color:T.info,spark:[18,21,23,25,27,28.7],sfx:" km\u00b2"},
+        {label:"Detection Rate",value:94,color:T.accent,spark:[88,89,91,92,93,94],sfx:"%"},
+        {label:"Regions Tracked",value:9,color:T.warning,spark:[3,4,5,6,7,9],sfx:""}
+      ].map(function(s,i){return(<Card key={i}><Lbl>{s.label}</Lbl>
+        <div style={{fontSize:26,fontWeight:700,color:s.color,fontFamily:mono,lineHeight:1,margin:"6px 0 8px"}}><AnimNum target={s.value}/>{s.sfx}</div>
+        <Sparkline data={s.spark} color={s.color} height={24}/></Card>);})}
     </div>
-
-    <div style={{display:"grid",gridTemplateColumns:"1fr 340px",gap:12,marginBottom:16}}>
-      <Crd style={{padding:10}}>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:12,marginBottom:16}}>
+      <Card style={{padding:12}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <Lbl>Global Monitoring Grid</Lbl>
-          <span style={{fontSize:10,color:T.accent,fontFamily:M}}>{"\u25cf"} LIVE</span></div>
-        <SatMap regions={MONITORED_REGIONS} sel={sel} onSel={setSel} h={420} z={2} lid="google"/>
-      </Crd>
-
+          <Lbl>Global Monitoring Grid</Lbl><span style={{fontSize:10,color:T.accent,fontFamily:mono}}>{"\u25cf"} LIVE</span></div>
+        <SatMap regions={MONITORED_REGIONS} selected={selectedRegion} onSelect={setSelectedRegion} height={400} zoom={2} showCtrl={true} layerId="esri_world"/>
+        <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}}>
+          {[{c:"#ff2d55",l:"Critical"},{c:"#ffaa00",l:"Warning"},{c:"#00d4aa",l:"Monitoring"}].map(function(x){return(
+            <div key={x.l} style={{display:"flex",alignItems:"center",gap:4}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:x.c,boxShadow:"0 0 6px "+x.c+"66"}}/>
+              <span style={{fontSize:9,color:T.textDim,fontFamily:mono}}>{x.l}</span></div>);})}
+          <span style={{fontSize:9,color:T.textDim,fontFamily:mono,marginLeft:"auto"}}>22 satellite layers available via layer control</span>
+        </div>
+      </Card>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        {sel&&(<Crd style={{flex:1}}>
+        {selectedRegion&&(<Card style={{flex:1}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"start",marginBottom:10}}>
-            <div><div style={{fontFamily:S,fontSize:17}}>{sel.name}</div>
-              <div style={{fontSize:10,color:T.textDim,fontFamily:M,marginTop:3}}>{sel.type}</div></div>
-            <Bdg s={sel.status}/></div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12}}>
-            {[{l:"Alerts",v:sel.alerts},{l:"Area",v:sel.area},{l:"Scanned",v:sel.lastScan},{l:"Change",v:sel.change}].map(function(x,i){return(
+            <div><div style={{fontFamily:serif,fontSize:16}}>{selectedRegion.name}</div>
+              <div style={{fontSize:10,color:T.textDim,fontFamily:mono,marginTop:2}}>{selectedRegion.type}</div></div>
+            <Badge status={selectedRegion.status}/></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            {[{l:"Alerts",v:selectedRegion.alerts},{l:"Area",v:selectedRegion.area},{l:"Last Scan",v:selectedRegion.lastScan},{l:"Change",v:selectedRegion.change}].map(function(x,i){return(
               <div key={i} style={{background:T.bgInput,borderRadius:6,padding:8}}>
-                <div style={{fontSize:8,color:T.textDim,fontFamily:M,textTransform:"uppercase"}}>{x.l}</div>
-                <div style={{fontSize:14,fontWeight:600,fontFamily:M,marginTop:2}}>{x.v}</div></div>);})}
+                <div style={{fontSize:9,color:T.textDim,fontFamily:mono,textTransform:"uppercase"}}>{x.l}</div>
+                <div style={{fontSize:14,fontWeight:600,fontFamily:mono,marginTop:2}}>{x.v}</div></div>);})}
           </div>
-          {sel.ndviDelta!=null&&(
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,fontSize:10,marginBottom:10}}>
-              <span>{"\u0394"}NDVI: <strong style={{color:T.danger}}>{sel.ndviDelta}</strong></span>
-              <span>Heat: <strong style={{color:T.warn}}>{sel.heatAnomaly}{"\u00b0C"}</strong></span>
-              <span>Veg Loss: <strong style={{color:T.danger}}>{sel.vegetationLossHa}ha</strong></span>
-              <span>Turbidity: <strong style={{color:T.warn}}>{sel.waterTurbidityRise}</strong></span></div>)}
-          <Lbl>AI Confidence</Lbl><div style={{marginTop:4}}><Mtr v={sel.confidence}/></div>
-        </Crd>)}
-        <Crd><Lbl>Latest Detections</Lbl><div style={{marginTop:6}}>
+          {selectedRegion.ndviDelta!=null&&(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:10,marginBottom:10}}>
+            <span>NDVI: <strong style={{color:T.danger}}>{selectedRegion.ndviDelta}</strong></span>
+            <span>Heat: <strong style={{color:T.warning}}>{selectedRegion.heatAnomaly}{"\u00b0C"}</strong></span>
+            <span>Veg Loss: <strong style={{color:T.danger}}>{selectedRegion.vegetationLossHa} ha</strong></span>
+            <span>Turbidity: <strong style={{color:T.warning}}>{selectedRegion.waterTurbidityRise}</strong></span></div>)}
+          <div style={{marginBottom:8}}><div style={{fontSize:10,color:T.textDim,fontFamily:mono,marginBottom:4}}>AI CONFIDENCE</div>
+            <Meter value={selectedRegion.confidence}/></div>
+          <div style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{selectedRegion.lat}{"\u00b0"}, {selectedRegion.lng}{"\u00b0"}</div>
+        </Card>)}
+        <Card><Lbl>Latest Detections</Lbl><div style={{marginTop:8}}>
           {ALERTS_FEED.slice(0,4).map(function(a){return(
-            <div key={a.id} style={{padding:"6px 0",borderBottom:"1px solid "+T.border,display:"flex",alignItems:"center",gap:6}}>
-              <div style={{width:7,height:7,borderRadius:"50%",background:a.severity==="critical"?T.danger:a.severity==="warning"?T.warn:T.info,flexShrink:0}}/>
+            <div key={a.id} style={{padding:"6px 0",borderBottom:"1px solid "+T.border,display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:a.severity==="critical"?T.danger:a.severity==="warning"?T.warning:T.info,flexShrink:0}}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.desc}</div>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:M}}>{a.time} {"\u2022"} {a.sat}</div></div></div>)})}</div></Crd>
+                <div style={{fontSize:9,color:T.textDim,fontFamily:mono}}>{a.time} {"\u2022"} {a.sat}</div></div></div>);})}</div></Card>
       </div>
     </div>
-
-    <Crd><Lbl>6-Month Detection Trend</Lbl><div style={{marginTop:10}}>
-      <Bars data={MONTHLY_DATA.map(function(d){return{l:d.month,v:d.alerts,c:T.accent};})} mx={200}/></div>
-      <div style={{display:"flex",gap:20,justifyContent:"center",marginTop:12}}>
-        {[{l:"Total Alerts",v:"760",c:T.accent},{l:"Confirmed",v:"570",c:T.warn},{l:"Disturbed",v:"1,178 ha",c:T.danger}].map(function(x,i){return(
-          <div key={i} style={{textAlign:"center"}}><div style={{fontSize:18,fontWeight:700,color:x.c,fontFamily:M}}>{x.v}</div>
-            <div style={{fontSize:9,color:T.textDim,fontFamily:M}}>{x.l}</div></div>)})}</div></Crd>
+    <Card><Lbl>6-Month Detection Trend</Lbl><div style={{marginTop:12}}>
+      <BarChart data={MONTHLY_DATA.map(function(d){return{label:d.month,value:d.alerts,color:T.accent};})} maxVal={200}/></div>
+      <div style={{display:"flex",gap:16,justifyContent:"center",marginTop:12}}>
+        {[{l:"Total Alerts",v:"760",c:T.accent},{l:"Confirmed",v:"570",c:T.warning},{l:"Area Disturbed",v:"1,178 ha",c:T.danger}].map(function(s,i){return(
+          <div key={i} style={{textAlign:"center"}}><div style={{fontSize:16,fontWeight:700,color:s.c,fontFamily:mono}}>{s.v}</div>
+            <div style={{fontSize:9,color:T.textDim,fontFamily:mono}}>{s.l}</div></div>);})}</div></Card>
   </div>);
 }
 
-/* ═══════════ DATA TABS ═══════════ */
-
-function SatsTab(){var _f=useState("all"),f=_f[0],sF=_f[1];
-  var ls=f==="all"?SATELLITE_SOURCES:SATELLITE_SOURCES.filter(function(s){return s.tier===f;});
+function SatellitesTab(){var _s=useState("all"),filter=_s[0],setFilter=_s[1];
+  var list=filter==="all"?SATELLITE_SOURCES:SATELLITE_SOURCES.filter(function(s){return s.tier===filter;});
   return(<div style={{paddingTop:16}}>
-    <div style={{display:"flex",gap:8,marginBottom:16}}>{["all","free","paid"].map(function(v){return(
-      <Btn key={v} active={f===v} onClick={function(){sF(v);}}>{v.toUpperCase()} ({v==="all"?SATELLITE_SOURCES.length:SATELLITE_SOURCES.filter(function(s){return s.tier===v;}).length})</Btn>)})}</div>
-    <div style={{display:"grid",gap:8}}>{ls.map(function(s,i){return(
-      <div key={i} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:16,display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:10}}>
-        <div><div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{s.name}</div>
-          <span style={{fontSize:9,padding:"2px 8px",borderRadius:4,display:"inline-block",background:s.tier==="free"?"#00d4aa15":"#ffaa0015",color:s.tier==="free"?"#00d4aa":"#ffaa00",fontFamily:M,fontWeight:700,textTransform:"uppercase",border:"1px solid "+(s.tier==="free"?"#00d4aa33":"#ffaa0033")}}>{s.tier}</span>
-          <div style={{fontSize:10,color:T.textSec,marginTop:6}}>{s.provider}</div></div>
-        <div><Lbl>Resolution</Lbl>
-          <div style={{fontFamily:M,fontWeight:700,fontSize:14,color:s.resolution.includes("0.")?T.accent:T.textPri,marginTop:4}}>{s.resolution}</div>
-          <Lbl style={{marginTop:8}}>Revisit</Lbl>
-          <div style={{fontSize:11,color:T.textSec,marginTop:4}}>{s.revisit}</div></div>
-        <div><Lbl>Cost</Lbl>
-          <div style={{fontFamily:M,fontWeight:700,fontSize:12,color:s.cost==="Free"?T.accent:T.warn,marginTop:4}}>{s.cost}</div>
-          <div style={{fontSize:9,color:T.textDim,marginTop:8,lineHeight:1.4}}>{s.bestFor}</div></div>
-      </div>)})}</div></div>);}
+    <div style={{display:"flex",gap:8,marginBottom:16}}>
+      {["all","free","paid"].map(function(f){return(<button key={f} onClick={function(){setFilter(f);}} style={{
+        background:filter===f?T.accentDim:T.bgCard,border:filter===f?"1px solid "+T.accent:"1px solid "+T.border,
+        color:filter===f?T.accent:T.textSecondary,padding:"6px 16px",borderRadius:6,cursor:"pointer",fontFamily:mono,fontSize:11,fontWeight:600,textTransform:"uppercase"}}>
+        {f} ({f==="all"?SATELLITE_SOURCES.length:SATELLITE_SOURCES.filter(function(s2){return s2.tier===f;}).length})</button>);})}</div>
+    <div style={{display:"grid",gap:8}}>
+      {list.map(function(s,i){return(<div key={i} style={{background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:14,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+        <div><div style={{fontWeight:600,fontSize:13,marginBottom:4}}>{s.name}</div>
+          <span style={{fontSize:9,padding:"1px 6px",borderRadius:3,display:"inline-block",background:s.tier==="free"?"#00d4aa18":"#ffaa0018",color:s.tier==="free"?"#00d4aa":"#ffaa00",fontFamily:mono,fontWeight:700,textTransform:"uppercase"}}>{s.tier}</span>
+          <div style={{fontSize:10,color:T.textSecondary,marginTop:4}}>{s.provider}</div></div>
+        <div><div style={{fontSize:9,color:T.textDim,fontFamily:mono,textTransform:"uppercase"}}>Resolution</div>
+          <div style={{fontFamily:mono,fontWeight:600,fontSize:13,color:s.resolution.includes("0.")?T.accent:T.textPrimary}}>{s.resolution}</div>
+          <div style={{fontSize:9,color:T.textDim,fontFamily:mono,marginTop:6,textTransform:"uppercase"}}>Revisit</div>
+          <div style={{fontSize:11,color:T.textSecondary}}>{s.revisit}</div></div>
+        <div><div style={{fontSize:9,color:T.textDim,fontFamily:mono,textTransform:"uppercase"}}>Cost</div>
+          <div style={{fontFamily:mono,fontWeight:600,fontSize:11,color:s.cost==="Free"?T.accent:T.warning}}>{s.cost}</div>
+          <div style={{fontSize:9,color:T.textDim,marginTop:6}}>{s.bestFor}</div></div>
+      </div>);})}</div>
+  </div>);
+}
 
-function AITab(){return(<div style={{paddingTop:16}}>
-  <div style={{display:"grid",gap:8,marginBottom:20}}>{AI_DETECTION_PIPELINE.map(function(s,i){return(
-    <div key={i} style={{display:"flex",gap:14,alignItems:"center",background:T.bgCard,border:"1px solid "+T.border,borderRadius:10,padding:16}}>
-      <div style={{width:48,height:48,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,"+T.accentDim+",transparent)",border:"1px solid "+T.accent,fontSize:22,flexShrink:0}}>{s.icon}</div>
-      <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8}}>
-        <span style={{fontFamily:M,fontSize:10,color:T.accent,fontWeight:700}}>STEP {s.step}</span>
-        <span style={{fontWeight:700,fontSize:15}}>{s.name}</span></div>
-        <div style={{fontSize:12,color:T.textSec,marginTop:3}}>{s.desc}</div></div></div>)})}</div>
-  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:12}}>
-    <Crd><div style={{fontFamily:S,fontSize:17,marginBottom:12}}>Free AI/ML Stack</div>
-      {AI_STACK.map(function(t,i){return(<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid "+T.border}}>
-        <span style={{fontFamily:M,fontSize:11,fontWeight:600,color:T.accent}}>{t.tool}</span>
-        <span style={{fontSize:10,color:T.textDim}}>{t.use}</span></div>)})}</Crd>
-    <Crd><div style={{fontFamily:S,fontSize:17,marginBottom:12}}>Detection Indices</div>
-      {DETECTION_INDICES.map(function(t,i){return(<div key={i} style={{padding:"6px 0",borderBottom:"1px solid "+T.border}}>
-        <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontFamily:M,fontSize:11,fontWeight:700,color:T.warn}}>{t.index}</span>
-          <span style={{fontSize:9,color:T.textDim,fontFamily:M}}>{t.formula}</span></div>
-        <div style={{fontSize:10,color:T.textSec,marginTop:2}}>{t.use}</div></div>)})}</Crd></div></div>);}
+function AIPipelineTab(){return(<div style={{paddingTop:16}}>
+  <div style={{display:"grid",gap:8,marginBottom:20}}>
+    {AI_DETECTION_PIPELINE.map(function(step,i){return(<div key={i} style={{display:"flex",gap:14,alignItems:"center",background:T.bgCard,border:"1px solid "+T.border,borderRadius:8,padding:14}}>
+      <div style={{width:44,height:44,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,"+T.accentDim+",transparent)",border:"1px solid "+T.accent,fontSize:20,flexShrink:0}}>{step.icon}</div>
+      <div style={{flex:1}}><div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <span style={{fontFamily:mono,fontSize:10,color:T.accent,fontWeight:700}}>STEP {step.step}</span>
+        <span style={{fontWeight:600,fontSize:14}}>{step.name}</span></div>
+        <div style={{fontSize:12,color:T.textSecondary,marginTop:2}}>{step.desc}</div></div></div>);})}</div>
+  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:12}}>
+    <Card><div style={{fontFamily:serif,fontSize:16,marginBottom:10}}>Free AI/ML Stack</div>
+      {AI_STACK.map(function(t,i){return(<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid "+T.border}}>
+        <span style={{fontFamily:mono,fontSize:11,fontWeight:600,color:T.accent}}>{t.tool}</span>
+        <span style={{fontSize:10,color:T.textDim}}>{t.use}</span></div>);})}</Card>
+    <Card><div style={{fontFamily:serif,fontSize:16,marginBottom:10}}>Detection Indices</div>
+      {DETECTION_INDICES.map(function(t,i){return(<div key={i} style={{padding:"5px 0",borderBottom:"1px solid "+T.border}}>
+        <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontFamily:mono,fontSize:11,fontWeight:700,color:T.warning}}>{t.index}</span>
+          <span style={{fontSize:9,color:T.textDim,fontFamily:mono}}>{t.formula}</span></div>
+        <div style={{fontSize:10,color:T.textSecondary,marginTop:1}}>{t.use}</div></div>);})}</Card>
+  </div>
+  <Card style={{marginTop:12}}><div style={{fontFamily:serif,fontSize:16,marginBottom:8}}>Free Training Datasets</div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10}}>
+      {TRAINING_DATASETS.map(function(d,i){return(<div key={i} style={{background:T.bgInput,borderRadius:6,padding:10}}>
+        <div style={{fontWeight:600,fontSize:11,color:T.accent}}>{d.name}</div>
+        <div style={{fontSize:10,color:T.textSecondary,marginTop:2}}>{d.desc}</div>
+        <div style={{fontSize:9,color:T.textDim,fontFamily:mono,marginTop:4}}>Source: {d.source}</div></div>);})}</div></Card>
+</div>);}
 
 function AlertsTab(){return(<div style={{paddingTop:16}}>
-  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-    <div style={{fontFamily:S,fontSize:20}}>Live Alert Feed</div>
+  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+    <div style={{fontFamily:serif,fontSize:18}}>Live Alert Feed</div>
     <div style={{display:"flex",alignItems:"center",gap:6}}>
       <div style={{width:8,height:8,borderRadius:"50%",background:T.danger,animation:"pulse 1.5s infinite"}}/>
-      <span style={{fontFamily:M,fontSize:10,color:T.danger,fontWeight:600}}>LIVE</span></div></div>
-  <div style={{display:"grid",gap:8}}>{ALERTS_FEED.map(function(a,i){return(
-    <Crd key={i} style={{borderLeft:"4px solid "+(a.severity==="critical"?T.danger:a.severity==="warning"?T.warn:T.info),
-      borderColor:a.severity==="critical"?"#ff2d5525":a.severity==="warning"?"#ffaa0025":T.border}}>
+      <span style={{fontFamily:mono,fontSize:10,color:T.danger}}>LIVE</span></div></div>
+  <div style={{display:"grid",gap:8}}>
+    {ALERTS_FEED.map(function(a,i){return(<div key={i} style={{background:T.bgCard,borderRadius:8,padding:14,
+      border:"1px solid "+(a.severity==="critical"?"#ff2d5530":a.severity==="warning"?"#ffaa0030":T.border),
+      borderLeft:"3px solid "+(a.severity==="critical"?T.danger:a.severity==="warning"?T.warning:T.info)}}>
       <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,flexWrap:"wrap",gap:4}}>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          <span style={{fontFamily:M,fontSize:10,color:T.textDim}}>{a.id}</span><Bdg s={a.severity}/>
-          <span style={{fontSize:10,color:T.textDim,fontFamily:M}}>{a.region}</span></div>
-        <span style={{fontSize:10,color:T.textDim,fontFamily:M}}>{a.time}</span></div>
-      <div style={{fontSize:12,lineHeight:1.5,marginBottom:8}}>{a.desc}</div>
-      <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:9,fontFamily:M,color:T.textDim}}>
-        <span>CONF <strong style={{color:a.confidence>=90?T.accent:T.warn,fontSize:11}}>{a.confidence}%</strong></span>
-        <span>SRC <strong style={{color:T.info,fontSize:11}}>{a.sat}</strong></span>
-        {a.ndvi!=null&&<span>{"\u0394"}NDVI <strong style={{color:T.danger,fontSize:11}}>{a.ndvi}</strong></span>}</div></Crd>)})}</div></div>);}
+          <span style={{fontFamily:mono,fontSize:10,color:T.textDim}}>{a.id}</span><Badge status={a.severity}/>
+          <span style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{a.region}</span></div>
+        <span style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{a.time}</span></div>
+      <div style={{fontSize:12,lineHeight:1.4,marginBottom:8}}>{a.desc}</div>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+        <span style={{fontSize:9,color:T.textDim,fontFamily:mono}}>CONF <strong style={{color:a.confidence>=90?T.accent:T.warning}}>{a.confidence}%</strong></span>
+        <span style={{fontSize:9,color:T.textDim,fontFamily:mono}}>SRC <strong style={{color:T.info}}>{a.sat}</strong></span>
+        {a.ndvi!=null&&<span style={{fontSize:9,color:T.textDim,fontFamily:mono}}>NDVI <strong style={{color:T.danger}}>{a.ndvi}</strong></span>}</div>
+    </div>);})}</div></div>);}
 
-function CostsTab(){var _s=useState(SATELLITE_SOURCES[0].name),sl=_s[0],sS=_s[1];
-  var sat=SATELLITE_SOURCES.find(function(s){return s.name===sl;})||SATELLITE_SOURCES[0];
+function SurveillanceTab({selectedRegion,setSelectedRegion}){
+  var _p=useState(false),play=_p[0],setPlay=_p[1];
+  var _i=useState(0),dayIndex=_i[0],setDayIndex=_i[1];
+  var _a=useState([]),alertLog=_a[0],setAlertLog=_a[1];
+  var focusedRegion=selectedRegion||MONITORED_REGIONS.find(function(r){return r.id===9;});
+  var history=REGION_HISTORY[focusedRegion?focusedRegion.id:9]||REGION_HISTORY[9]||[];
+  var current=history[dayIndex]||{};
+  useEffect(function(){if(!play||dayIndex>=history.length-1){setPlay(false);return;}
+    var timer=setTimeout(function(){setDayIndex(function(i){return Math.min(i+1,history.length-1);});},1200);
+    return function(){clearTimeout(timer);};},
+  [play,dayIndex,history.length]);
+  useEffect(function(){if(!current.date)return;var events=[];
+    if(current.ndviDelta<=-0.35)events.push("Critical vegetation decline");
+    if(current.heatAnomaly>=2.0)events.push("Thermal hotspot expanding");
+    if(current.waterTurbidityRise>=0.15)events.push("Turbidity plume risk");
+    if(events.length>0)setAlertLog(function(prev){return[{region:focusedRegion.name,date:current.date,ndvi:current.ndviDelta,heat:current.heatAnomaly,events:events}].concat(prev).slice(0,10);});},
+  [dayIndex]);
+  var dateStr=current.date||gDate(1);
+  return(<div style={{paddingTop:16}}>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
+      {MONITORED_REGIONS.filter(function(r){return REGION_HISTORY[r.id];}).map(function(r){return(
+        <button key={r.id} onClick={function(){setSelectedRegion(r);setDayIndex(0);setAlertLog([]);}} style={{
+          padding:"6px 12px",borderRadius:6,fontFamily:mono,fontSize:10,fontWeight:700,cursor:"pointer",
+          background:focusedRegion&&focusedRegion.id===r.id?T.accentDim:T.bgCard,
+          border:focusedRegion&&focusedRegion.id===r.id?"1px solid "+T.accent:"1px solid "+T.border,
+          color:focusedRegion&&focusedRegion.id===r.id?T.accent:T.textSecondary}}>{r.name.split(",")[0]}</button>);})}
+      <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+        <button onClick={function(){setPlay(!play);}} style={{padding:"8px 14px",borderRadius:6,border:"none",background:play?T.danger:T.accent,color:play?"#fff":"#010c14",fontWeight:700,cursor:"pointer",fontFamily:mono,fontSize:11}}>
+          {play?"\u23f8 Pause":"\u25b6 Play"}</button>
+        <input type="range" min={0} max={history.length-1} value={dayIndex} onChange={function(e){setDayIndex(Number(e.target.value));}} style={{width:120}}/>
+        <span style={{fontFamily:mono,fontSize:11,color:T.accent,minWidth:80}}>{dateStr}</span></div></div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 340px",gap:12}}>
+      <Card style={{padding:12}}>
+        <Lbl>Surveillance {"\u2014"} {focusedRegion.name}</Lbl>
+        <div style={{marginTop:8}}><SatMap key={"surv-"+focusedRegion.id} regions={[focusedRegion]} selected={focusedRegion} onSelect={function(){}} height={360} zoom={8} showCtrl={true} layerId="modis_terra" date={dateStr}/></div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginTop:10}}>
+          {[{l:"NDVI",v:current.ndviDelta,c:current.ndviDelta<=-0.35?T.danger:T.textSecondary},
+            {l:"Heat",v:current.heatAnomaly!=null?current.heatAnomaly+"\u00b0C":"\u2014",c:current.heatAnomaly>=2.0?T.danger:T.textSecondary},
+            {l:"Veg Loss",v:current.vegetationLossHa!=null?current.vegetationLossHa+" ha":"\u2014",c:T.warning},
+            {l:"Turbidity",v:current.waterTurbidityRise!=null?String(current.waterTurbidityRise):"\u2014",c:current.waterTurbidityRise>=0.15?T.danger:T.textSecondary}
+          ].map(function(x,i){return(<div key={i} style={{background:T.bgInput,borderRadius:6,padding:8,textAlign:"center"}}>
+            <div style={{fontSize:8,color:T.textDim,fontFamily:mono,textTransform:"uppercase"}}>{x.l}</div>
+            <div style={{fontSize:14,fontWeight:700,fontFamily:mono,color:x.c,marginTop:2}}>{x.v!=null?x.v:"\u2014"}</div></div>);})}
+        </div></Card>
+      <Card style={{padding:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{fontWeight:700,fontSize:12}}>Auto Alert Log</div>
+          <button onClick={function(){setAlertLog([]);}} style={{fontSize:10,background:"transparent",color:T.accent,border:"1px solid "+T.border,padding:"3px 8px",borderRadius:4,cursor:"pointer"}}>Clear</button></div>
+        <div style={{maxHeight:400,overflowY:"auto",display:"grid",gap:6}}>
+          {alertLog.length===0&&<div style={{color:T.textDim,fontSize:11,padding:10}}>Play timelapse to see alerts auto-generate.</div>}
+          {alertLog.map(function(item,idx){return(<div key={idx} style={{background:T.bgInput,border:"1px solid "+T.border,borderLeft:"3px solid "+T.danger,borderRadius:6,padding:8}}>
+            <div style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{item.date} {"\u2022"} {item.region}</div>
+            <div style={{fontSize:11,fontWeight:700,fontFamily:mono,marginTop:2}}>NDVI {item.ndvi} | Heat {item.heat}{"\u00b0C"}</div>
+            {item.events.map(function(e,i2){return <div key={i2} style={{fontSize:10,color:T.danger,marginTop:2}}>{"\u26a0"} {e}</div>;})}</div>);})}</div>
+        <div style={{marginTop:10,borderTop:"1px solid "+T.border,paddingTop:10}}>
+          <button onClick={function(){var blob=new Blob([JSON.stringify({region:focusedRegion,history:history,alerts:alertLog},null,2)],{type:"application/json"});
+            var u=URL.createObjectURL(blob);var a=document.createElement("a");a.href=u;a.download="surveillance-"+focusedRegion.name.replace(/\s+/g,"-")+".json";a.click();URL.revokeObjectURL(u);}}
+            style={{background:T.accent,color:"#010c14",border:"none",padding:"8px 12px",borderRadius:6,fontWeight:700,cursor:"pointer",fontFamily:mono,fontSize:11,width:"100%"}}>
+            Export Bundle</button></div></Card></div></div>);
+}
+
+function CostsTab(){var _s=useState(SATELLITE_SOURCES[0].name),sel=_s[0],setSel=_s[1];
+  var sat=SATELLITE_SOURCES.find(function(s){return s.name===sel;})||SATELLITE_SOURCES[0];
   var mc=Number(sat.monthlyCost||0),sc=Number(sat.setupCost||0),ac=Number(sat.annualCost||mc*12);
   return(<div style={{paddingTop:16}}>
-    <div style={{fontFamily:S,fontSize:20,marginBottom:14}}>Cost Calculator</div>
+    <div style={{fontFamily:serif,fontSize:18,marginBottom:12}}>Cost Calculator</div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-      <Crd><Lbl>Select Satellite</Lbl>
-        <select value={sl} onChange={function(e){sS(e.target.value);}} style={{width:"100%",borderRadius:6,background:T.bgInput,color:T.textPri,border:"1px solid "+T.border,padding:"10px",marginTop:6,fontFamily:M,fontSize:12}}>
-          {SATELLITE_SOURCES.map(function(s){return <option key={s.name} value={s.name}>{s.name} ({s.tier})</option>})}</select></Crd>
-      <Crd><Lbl>Selected</Lbl><div style={{fontSize:16,fontWeight:700,marginTop:6}}>{sat.name}</div>
-        <div style={{fontSize:11,color:T.textSec,marginTop:4}}>{sat.provider} {"\u2022"} {sat.resolution} {"\u2022"} {sat.revisit}</div></Crd></div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:10,marginBottom:16}}>
-      {[{l:"Monthly",v:"$"+mc.toLocaleString(),c:mc===0?T.accent:T.textPri},{l:"Annual",v:"$"+ac.toLocaleString(),c:T.info},{l:"Setup",v:"$"+sc.toLocaleString(),c:T.warn},{l:"Year 1 Total",v:"$"+(ac+sc).toLocaleString(),c:T.accent}].map(function(x,i){return(
-        <div key={i} style={{background:T.bgInput,border:"1px solid "+T.border,borderRadius:8,padding:14}}>
-          <div style={{fontSize:9,color:T.textDim,fontFamily:M,textTransform:"uppercase"}}>{x.l}</div>
-          <div style={{fontSize:24,fontWeight:700,fontFamily:M,color:x.c,marginTop:6}}>{x.v}</div></div>)})}</div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
-      {Object.entries(COST_CALCULATOR).map(function(e){var k=e[0],v=e[1];return(
-        <Crd key={k}><div style={{fontFamily:M,fontSize:10,color:T.accent,textTransform:"uppercase",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>{k}</div>
-          <div style={{fontSize:28,fontWeight:700,fontFamily:M,marginBottom:6}}>${v.monthlyCost.toLocaleString()}<span style={{fontSize:11,color:T.textDim,fontWeight:400}}>/mo</span></div>
-          <div style={{fontSize:10,color:T.textSec,lineHeight:1.7}}>Setup: ${v.setup.toLocaleString()} {"\u2022"} Compute: {v.compute}<br/>Res: {v.resolution} {"\u2022"} Revisit: {v.revisit}</div></Crd>)})}</div></div>);}
-
-function PlanTab(){return(<div style={{paddingTop:16}}>
-  <div style={{fontFamily:S,fontSize:20,marginBottom:16}}>Build Roadmap</div>
-  {ROADMAP.map(function(p,pi){return(<Crd key={pi} style={{marginBottom:12}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
-      <div style={{fontFamily:S,fontSize:16,color:p.color}}>{p.phase}</div>
-      <span style={{fontFamily:M,fontSize:9,padding:"4px 10px",borderRadius:4,background:p.color+"15",color:p.color,border:"1px solid "+p.color+"44",fontWeight:700}}>{p.status}</span></div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:6}}>
-      {p.items.map(function(it,ii){return(<div key={ii} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"5px 0"}}>
-        <div style={{width:18,height:18,borderRadius:5,border:"1px solid "+p.color+"44",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <div style={{width:7,height:7,borderRadius:2,background:p.color+"44"}}/></div>
-        <span style={{fontSize:11,color:T.textSec,lineHeight:1.5}}>{it}</span></div>)})}</div></Crd>)})}
-  <Crd style={{border:"1px solid "+T.accent}}>
-    <div style={{fontFamily:S,fontSize:17,color:T.accent,marginBottom:12}}>Revenue Model</div>
+      <Card style={{padding:12}}><Lbl>Select Satellite</Lbl>
+        <select value={sel} onChange={function(e){setSel(e.target.value);}} style={{width:"100%",borderRadius:6,background:T.bgInput,color:T.textPrimary,border:"1px solid "+T.border,padding:"8px",marginTop:6}}>
+          {SATELLITE_SOURCES.map(function(s){return <option key={s.name} value={s.name}>{s.name} ({s.tier})</option>;})}</select></Card>
+      <Card style={{padding:12}}><Lbl>Selected</Lbl><div style={{fontSize:14,fontWeight:700,marginTop:4}}>{sat.name}</div>
+        <div style={{fontSize:10,color:T.textSecondary,marginTop:2}}>{sat.provider} {"\u2022"} {sat.resolution} {"\u2022"} {sat.revisit}</div></Card></div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:16}}>
+      {[{l:"Monthly",v:"$"+mc.toLocaleString(),c:mc===0?T.accent:T.textPrimary},{l:"Annual",v:"$"+ac.toLocaleString(),c:T.info},{l:"Setup",v:"$"+sc.toLocaleString(),c:T.warning},{l:"Year 1",v:"$"+(ac+sc).toLocaleString(),c:T.accent}].map(function(x,i){return(
+        <div key={i} style={{background:T.bgInput,border:"1px solid "+T.border,borderRadius:6,padding:12}}>
+          <div style={{fontSize:9,color:T.textDim,fontFamily:mono,textTransform:"uppercase"}}>{x.l}</div>
+          <div style={{fontSize:22,fontWeight:700,fontFamily:mono,color:x.c,marginTop:4}}>{x.v}</div></div>);})}
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:12}}>
-      {REVENUE_PLANS.map(function(p,i){return(<div key={i} style={{background:T.bgInput,borderRadius:8,padding:16}}>
-        <div style={{fontFamily:M,fontWeight:700,color:T.accent,fontSize:14}}>{p.plan}</div>
-        <div style={{fontSize:24,fontWeight:700,fontFamily:M,margin:"8px 0"}}>{p.price}</div>
-        <div style={{fontSize:10,color:T.warn,marginBottom:4}}>{p.target}</div>
-        <div style={{fontSize:10,color:T.textDim,lineHeight:1.5}}>{p.features}</div></div>)})}</div></Crd></div>);}
+      {Object.entries(COST_CALCULATOR).map(function(entry){var key=entry[0],val=entry[1];return(
+        <Card key={key}><div style={{fontFamily:mono,fontSize:10,color:T.accent,textTransform:"uppercase",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>{key} TIER</div>
+          <div style={{fontSize:26,fontWeight:700,fontFamily:mono,marginBottom:4}}>${val.monthlyCost.toLocaleString()}<span style={{fontSize:11,color:T.textDim,fontWeight:400}}>/mo</span></div>
+          <div style={{fontSize:10,color:T.textSecondary,lineHeight:1.6}}>Setup: ${val.setup.toLocaleString()} {"\u2022"} {val.compute}<br/>Resolution: {val.resolution} {"\u2022"} Revisit: {val.revisit}</div></Card>);})}
+    </div></div>);
+}
 
-/* ═══════════ MAIN ═══════════ */
+function BuildPlanTab(){return(<div style={{paddingTop:16}}>
+  <div style={{fontFamily:serif,fontSize:18,marginBottom:16}}>Product Build Roadmap</div>
+  {ROADMAP.map(function(phase,pi){return(<Card key={pi} style={{marginBottom:12}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+      <div style={{fontFamily:serif,fontSize:15,color:phase.color}}>{phase.phase}</div>
+      <span style={{fontFamily:mono,fontSize:9,padding:"3px 8px",borderRadius:4,background:phase.color+"18",color:phase.color,border:"1px solid "+phase.color+"44",fontWeight:700}}>{phase.status}</span></div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:6}}>
+      {phase.items.map(function(item,ii){return(<div key={ii} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"4px 0"}}>
+        <div style={{width:16,height:16,borderRadius:4,border:"1px solid "+phase.color+"44",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{width:6,height:6,borderRadius:2,background:phase.color+"44"}}/></div>
+        <span style={{fontSize:11,color:T.textSecondary,lineHeight:1.4}}>{item}</span></div>);})}</div></Card>);})}
+  <Card style={{border:"1px solid "+T.accent}}>
+    <div style={{fontFamily:serif,fontSize:16,color:T.accent,marginBottom:10}}>Revenue Model</div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12}}>
+      {REVENUE_PLANS.map(function(p,i){return(<div key={i} style={{background:T.bgInput,borderRadius:6,padding:14}}>
+        <div style={{fontFamily:mono,fontWeight:700,color:T.accent,fontSize:13}}>{p.plan}</div>
+        <div style={{fontSize:22,fontWeight:700,fontFamily:mono,margin:"6px 0"}}>{p.price}</div>
+        <div style={{fontSize:10,color:T.warning,marginBottom:4}}>{p.target}</div>
+        <div style={{fontSize:10,color:T.textDim,lineHeight:1.4}}>{p.features}</div></div>);})}</div></Card>
+</div>);}
+
+/* ═══════════════════════════════════════════════════
+   MAIN APP
+   ═══════════════════════════════════════════════════ */
 
 export default function App(){
-  var _t=useState("overview"),tab=_t[0],sT=_t[1];
-  var _r=useState(MONITORED_REGIONS[4]),sel=_r[0],sR=_r[1];
-  var _c=useState(new Date()),tm=_c[0],sTm=_c[1];
-  useEffect(function(){var t=setInterval(function(){sTm(new Date());},1000);return function(){clearInterval(t);};},[]);
+  var _t=useState("imagery"),activeTab=_t[0],setActiveTab=_t[1];
+  var _r=useState(MONITORED_REGIONS[4]),selectedRegion=_r[0],setSelectedRegion=_r[1];
+  var _c=useState(new Date()),time=_c[0],setTime=_c[1];
+  useEffect(function(){var t=setInterval(function(){setTime(new Date());},1000);return function(){clearInterval(t);};},
+  []);
 
   var tabs=[
-    {id:"overview",l:"Mission Control",i:"\u25c9"},
-    {id:"imagery",l:"Imagery Lab",i:"\ud83d\udef0\ufe0f"},
-    {id:"sats",l:"Satellite Intel",i:"\ud83d\udce1"},
-    {id:"ai",l:"AI Pipeline",i:"\ud83e\udde0"},
-    {id:"alerts",l:"Alerts",i:"\ud83d\udea8"},
-    {id:"costs",l:"Costs",i:"\ud83d\udcb0"},
-    {id:"plan",l:"Roadmap",i:"\ud83d\udccb"},
+    {id:"overview",label:"Mission Control",icon:"\u25c9"},
+    {id:"detections",label:"AI Detections",icon:"\ud83c\udfaf"},
+    {id:"imagery",label:"Imagery Lab",icon:"\ud83d\udef0\ufe0f"},
+    {id:"satellites",label:"Satellite Intel",icon:"\ud83d\udce1"},
+    {id:"ai",label:"AI Pipeline",icon:"\ud83e\udde0"},
+    {id:"alerts",label:"Live Alerts",icon:"\ud83d\udea8"},
+    {id:"surveillance",label:"Surveillance",icon:"\ud83c\udfaf"},
+    {id:"costs",label:"Costs",icon:"\ud83d\udcb0"},
+    {id:"plan",label:"Build Plan",icon:"\ud83d\udccb"},
   ];
 
   return(
-    <div style={{fontFamily:F,color:T.textPri,background:T.bgPrimary,minHeight:"100vh",maxWidth:1320,margin:"0 auto",padding:"0 20px"}}>
-      <header style={{padding:"22px 0 14px",borderBottom:"1px solid "+T.border,display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:40,height:40,borderRadius:10,background:"linear-gradient(135deg,#00d4aa,#0088ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:700,color:"#fff",boxShadow:"0 4px 20px #00d4aa33"}}>{"\u25c8"}</div>
-          <div>
-            <h1 style={{fontFamily:S,fontSize:30,margin:0,letterSpacing:"-0.03em",lineHeight:1}}>Terra Sentinel</h1>
-            <p style={{margin:"3px 0 0",fontSize:10,color:T.textDim,fontFamily:M,letterSpacing:"0.12em",textTransform:"uppercase"}}>
-              Satellite Intelligence Platform</p></div></div>
+    <div style={{fontFamily:sans,color:T.textPrimary,background:T.bgPrimary,minHeight:"100vh",maxWidth:1280,margin:"0 auto",padding:"0 16px"}}>
+      <header style={{padding:"20px 0 12px",borderBottom:"1px solid "+T.border,display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:36,height:36,borderRadius:6,background:"linear-gradient(135deg,#00d4aa,#0088ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#fff"}}>{"\u25c8"}</div>
+          <div><h1 style={{fontFamily:serif,fontSize:26,margin:0,letterSpacing:"-0.02em",lineHeight:1}}>Terra Sentinel</h1>
+            <p style={{margin:0,fontSize:11,color:T.textDim,fontFamily:mono,letterSpacing:"0.08em",textTransform:"uppercase"}}>
+              Satellite Intelligence {"\u2022"} Illegal Mining Detection</p></div></div>
         <div style={{textAlign:"right"}}>
-          <div style={{fontFamily:M,fontSize:14,color:T.accent,fontWeight:600}}>{tm.toLocaleTimeString()} UTC</div>
-          <div style={{fontSize:10,color:T.textDim,fontFamily:M}}>{MONITORED_REGIONS.length} Regions {"\u2022"} {LAYERS.length} Imagery Layers {"\u2022"} {SMODES.length} Analysis Modes</div></div>
+          <div style={{fontFamily:mono,fontSize:13,color:T.accent,fontWeight:600}}>{time.toLocaleTimeString()} UTC</div>
+          <div style={{fontSize:10,color:T.textDim,fontFamily:mono}}>{MONITORED_REGIONS.length} REGIONS {"\u2022"} {SAT_LAYERS.length} IMAGERY LAYERS {"\u2022"} {SATELLITE_SOURCES.length} DATA SOURCES</div></div>
       </header>
 
-      <nav style={{display:"flex",gap:3,padding:"14px 0",overflowX:"auto",borderBottom:"1px solid "+T.border}}>
-        {tabs.map(function(t){return(
-          <button key={t.id} onClick={function(){sT(t.id);}} style={{
-            background:tab===t.id?T.accentDim:"transparent",
-            border:tab===t.id?"1px solid "+T.accent:"1px solid transparent",
-            color:tab===t.id?T.accent:T.textSec,
-            padding:"8px 18px",borderRadius:8,cursor:"pointer",
-            fontFamily:M,fontSize:11,fontWeight:700,
-            display:"flex",alignItems:"center",gap:7,transition:"all 0.15s",whiteSpace:"nowrap"}}>
-            <span style={{fontSize:14}}>{t.i}</span>{t.l}</button>)})}</nav>
+      <nav style={{display:"flex",gap:2,padding:"12px 0",overflowX:"auto",borderBottom:"1px solid "+T.border}}>
+        {tabs.map(function(t2){return(
+          <button key={t2.id} onClick={function(){setActiveTab(t2.id);}} style={{
+            background:activeTab===t2.id?T.accentDim:"transparent",border:activeTab===t2.id?"1px solid "+T.accent:"1px solid transparent",
+            color:activeTab===t2.id?T.accent:T.textSecondary,padding:"6px 14px",borderRadius:6,cursor:"pointer",
+            fontFamily:mono,fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:6,transition:"all 0.2s",whiteSpace:"nowrap"}}>
+            <span>{t2.icon}</span>{t2.label}</button>);})}</nav>
 
-      <div style={{minHeight:"60vh"}}>
-        {tab==="overview"&&<Overview sel={sel} setSel={sR}/>}
-        {tab==="imagery"&&<ImageryLab sel={sel} setSel={sR}/>}
-        {tab==="sats"&&<SatsTab/>}
-        {tab==="ai"&&<AITab/>}
-        {tab==="alerts"&&<AlertsTab/>}
-        {tab==="costs"&&<CostsTab/>}
-        {tab==="plan"&&<PlanTab/>}
-      </div>
+      {activeTab==="overview"&&<OverviewTab selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion}/>}
+      {activeTab==="detections"&&<DetectionsTab sel={selectedRegion} setSel={setSelectedRegion}/>}
+      {activeTab==="imagery"&&<ImageryLabTab selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion}/>}
+      {activeTab==="satellites"&&<SatellitesTab/>}
+      {activeTab==="ai"&&<AIPipelineTab/>}
+      {activeTab==="alerts"&&<AlertsTab/>}
+      {activeTab==="surveillance"&&<SurveillanceTab selectedRegion={selectedRegion} setSelectedRegion={setSelectedRegion}/>}
+      {activeTab==="costs"&&<CostsTab/>}
+      {activeTab==="plan"&&<BuildPlanTab/>}
 
-      <footer style={{borderTop:"1px solid "+T.border,padding:"18px 0 28px",marginTop:28,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-        <span style={{fontSize:10,color:T.textDim,fontFamily:M}}>TERRA SENTINEL v1.0</span>
-        <span style={{fontSize:10,color:T.textDim,fontFamily:M}}>Sentinel-2 {"\u2022"} Google {"\u2022"} ESRI {"\u2022"} NASA GIBS {"\u2022"} EOX {"\u2022"} Sentinel Hub</span></footer>
+      <footer style={{borderTop:"1px solid "+T.border,padding:"16px 0 24px",marginTop:24,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <span style={{fontSize:10,color:T.textDim,fontFamily:mono}}>TERRA SENTINEL v1.0</span>
+        <span style={{fontSize:10,color:T.textDim,fontFamily:mono}}>Sentinel-2 {"\u2022"} Landsat {"\u2022"} MODIS {"\u2022"} VIIRS {"\u2022"} HLS {"\u2022"} NASA GIBS</span></footer>
 
-      <style>{"\n@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}\n.leaflet-control-layers{background:#0c1a28 !important;color:#8aa4be !important;border:1px solid #1a3a5a !important;border-radius:8px !important;font-family:'JetBrains Mono',monospace !important;font-size:11px !important;}\n.leaflet-control-layers label{color:#8aa4be !important;}\n.leaflet-control-layers-selector{accent-color:#00d4aa;}\n.leaflet-popup-content-wrapper{background:#0c1a28 !important;color:#e0e8f0 !important;border:1px solid #1a3a5a !important;border-radius:10px !important;box-shadow:0 8px 32px rgba(0,0,0,0.5) !important;}\n.leaflet-popup-tip{background:#0c1a28 !important;}\n.leaflet-popup-close-button{color:#4a6a8a !important;font-size:16px !important;}\n.leaflet-container{background:#060d14 !important;}\n.leaflet-control-zoom a{background:#0c1a28 !important;color:#00d4aa !important;border-color:#1a3a5a !important;font-weight:700;}\n.leaflet-control-zoom a:hover{background:#0f2030 !important;}\ninput[type=range]{accent-color:#00d4aa;height:6px;}\nselect{font-family:'JetBrains Mono',monospace;}\n"}</style>
+      <style>{"\n@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}\n.leaflet-control-layers{background:#0c1a28 !important;color:#8aa4be !important;border:1px solid #12283e !important;border-radius:6px !important;max-height:400px;overflow-y:auto !important;}\n.leaflet-control-layers label{color:#8aa4be !important;font-size:11px !important;}\n.leaflet-control-layers-selector{accent-color:#00d4aa;}\n.leaflet-popup-content-wrapper{background:#0c1a28 !important;color:#e0e8f0 !important;border:1px solid #12283e !important;border-radius:8px !important;}\n.leaflet-popup-tip{background:#0c1a28 !important;}\n.leaflet-popup-close-button{color:#4a6a8a !important;}\n.leaflet-container{background:#060d14 !important;}\ninput[type=range]{accent-color:#00d4aa;}\n"}</style>
     </div>);
 }
