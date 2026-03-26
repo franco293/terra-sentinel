@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-03-26T06:00:00Z",
+  "regions": [
+    {"id":1,"name":"Madre de Dios, Peru","type":"Gold (Alluvial)","detections":{"high":2,"medium":2,"low":1},"sensors":{"sentinel2":"OK (12 current, 8 baseline)","sentinel1":"OK (18 current, 14 baseline)","landsat_thermal":"OK (3 images)"}},
+    {"id":2,"name":"Obuasi Region, Ghana","type":"Gold (Galamsey)","detections":{"high":2,"medium":1,"low":1},"sensors":{"sentinel2":"OK (9 current, 6 baseline)","sentinel1":"OK (14 current, 11 baseline)","landsat_thermal":"OK (2 images)"}},
+    {"id":3,"name":"Limpopo, South Africa","type":"Chrome/PGMs","detections":{"high":3,"medium":2,"low":0},"sensors":{"sentinel2":"OK (15 current, 10 baseline)","sentinel1":"OK (20 current, 16 baseline)","landsat_thermal":"OK (4 images)"}},
+    {"id":4,"name":"Kalimantan, Indonesia","type":"Gold/Coal","detections":{"high":0,"medium":2,"low":1},"sensors":{"sentinel2":"OK (6 current, 5 baseline)","sentinel1":"OK (12 current, 10 baseline)","landsat_thermal":"NO DATA (cloudy)"}},
+    {"id":5,"name":"Yanomami Territory, Brazil","type":"Gold (Garimpeiro)","detections":{"high":4,"medium":3,"low":2},"sensors":{"sentinel2":"OK (8 current, 4 baseline)","sentinel1":"OK (22 current, 18 baseline)","landsat_thermal":"OK (2 images)"}},
+    {"id":6,"name":"Lao Cai, Vietnam","type":"Iron Ore","detections":{"high":0,"medium":1,"low":1},"sensors":{"sentinel2":"OK (10 current, 7 baseline)","sentinel1":"OK (15 current, 12 baseline)","landsat_thermal":"OK (3 images)"}},
+    {"id":7,"name":"Chocó, Colombia","type":"Gold/Platinum","detections":{"high":2,"medium":2,"low":1},"sensors":{"sentinel2":"OK (5 current, 3 baseline)","sentinel1":"OK (16 current, 13 baseline)","landsat_thermal":"NO DATA (cloudy)"}},
+    {"id":8,"name":"Mpumalanga, South Africa","type":"Coal","detections":{"high":0,"medium":1,"low":1},"sensors":{"sentinel2":"OK (14 current, 11 baseline)","sentinel1":"OK (18 current, 15 baseline)","landsat_thermal":"OK (4 images)"}},
+    {"id":9,"name":"Geita, Tanzania","type":"Gold (Open Pit)","detections":{"high":3,"medium":3,"low":1},"sensors":{"sentinel2":"OK (11 current, 8 baseline)","sentinel1":"OK (19 current, 15 baseline)","landsat_thermal":"OK (3 images)"}}
+  ],
+  "totals": {"high": 16, "medium": 17, "low": 9}
+}

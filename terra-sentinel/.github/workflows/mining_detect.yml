@@ -1,0 +1,68 @@
+name: Terra Sentinel — Mining Detection Pipeline
+
+on:
+  # Run every Monday at 06:00 UTC
+  schedule:
+    - cron: '0 6 * * 1'
+
+  # Manual trigger from GitHub UI
+  workflow_dispatch:
+
+  # Also run on push to pipeline/ directory (for testing)
+  push:
+    paths:
+      - 'pipeline/**'
+
+permissions:
+  contents: write
+
+jobs:
+  detect:
+    name: Multi-Sensor Mining Detection
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r pipeline/requirements.txt
+
+      - name: Run detection pipeline
+        env:
+          GEE_SERVICE_ACCOUNT_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
+        run: |
+          python pipeline/detect_mining.py
+
+      - name: Commit detection results
+        run: |
+          git config user.name "Terra Sentinel Bot"
+          git config user.email "bot@terra-sentinel.dev"
+
+          # Add detection output files
+          git add public/detections/hotspots.geojson
+          git add public/detections/tile_urls.json
+          git add public/detections/report.json
+
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            HIGH=$(python -c "import json; d=json.load(open('public/detections/report.json')); print(d['totals']['high'])")
+            MED=$(python -c "import json; d=json.load(open('public/detections/report.json')); print(d['totals']['medium'])")
+            LOW=$(python -c "import json; d=json.load(open('public/detections/report.json')); print(d['totals']['low'])")
+
+            git commit -m "Detection update: ${HIGH} high, ${MED} medium, ${LOW} low [${TIMESTAMP}]"
+            git push
+            echo "Results committed and pushed — Vercel will auto-deploy"
+          fi
